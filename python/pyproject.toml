@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "betterclock-time"
+version = "0.1.0"
+description = "Python client library for BetterClock local network time API"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "BetterClock" }
+]
+license = { text = "Proprietary" }
+dependencies = []
+
+[project.optional-dependencies]
+mdns = ["zeroconf>=0.132.2"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["betterclock_time*"]

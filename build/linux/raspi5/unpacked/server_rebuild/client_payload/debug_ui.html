@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BetterClock Debug UI</title>
+  <style>
+    :root {
+      --bg: #081220;
+      --bg-warn-soft: #2c1b0d;
+      --bg-warn-pulse: #4a260f;
+      --panel: #101d31;
+      --panel-warn: #3b2616;
+      --border: #2a4568;
+      --border-warn: #b46a36;
+      --text: #dce6f2;
+      --muted: #93a8c2;
+      --accent: #6ee0d2;
+      --warn: #ffbe73;
+      --bad: #ff9b9b;
+      --ok: #90e7a7;
+    }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      transition: background 120ms linear;
+    }
+    h1 {
+      margin: 0 0 12px 0;
+      color: var(--accent);
+      font-size: 22px;
+    }
+    .row {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      transition: border-color 120ms linear, box-shadow 120ms linear, background 120ms linear;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .value {
+      font-size: 30px;
+      color: var(--accent);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .kv {
+      white-space: pre;
+      line-height: 1.35;
+      font-size: 13px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 6px;
+      white-space: nowrap;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .ok { color: var(--ok); }
+    .pulse-soft {
+      background: var(--bg-warn-soft);
+    }
+    .pulse-soft .panel {
+      border-color: var(--border-warn);
+      background: var(--panel-warn);
+      box-shadow: 0 0 0 1px rgba(255, 190, 115, 0.2);
+    }
+    .pulse-on {
+      background: var(--bg-warn-pulse);
+    }
+    .pulse-on .panel {
+      border-color: #ffa968;
+      box-shadow: 0 0 0 1px rgba(255, 173, 104, 0.4), 0 0 18px rgba(255, 140, 64, 0.22);
+    }
+    .clock-warn {
+      color: #ffd799;
+      text-shadow: 0 0 10px rgba(255, 181, 102, 0.35);
+    }
+  </style>
+</head>
+<body>
+  <h1>BetterClock Debug UI</h1>
+  <div class="row">
+    <section class="panel">
+      <div id="stamp" class="meta">connecting...</div>
+      <div id="clock" class="value">--:--:--</div>
+      <div id="runtime" class="kv"></div>
+    </section>
+    <section class="panel">
+      <div class="meta">Connected Clients</div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Instance</th>
+            <th>IP</th>
+            <th>Ping</th>
+            <th>Offset</th>
+            <th>Desync</th>
+            <th>Req/s</th>
+            <th>Conn</th>
+          </tr>
+        </thead>
+        <tbody id="clients"></tbody>
+      </table>
+    </section>
+  </div>
+  <script>
+    const DEBUG_CLIENT_ID = "debug-web";
+    const DEBUG_CLIENT_INSTANCE = getDebugClientInstance();
+    const STATE_POLL_MS = 350;
+    const UI_TICK_MS = 50;
+    const LATENCY_SAMPLE_WINDOW = 24;
+    const LOW_RTT_SAMPLE_FLOOR = 5;
+    const LOW_RTT_HEADROOM_MS = 8.0;
+    const OFFSET_SLEW_RATE_MS_PER_SEC = 240.0;
+    const OFFSET_DESYNC_GAIN_FAST = 0.35;
+    const OFFSET_DESYNC_GAIN_SLOW = 0.16;
+    const latencyModel = {
+      initialized: false,
+      rttEwmaMs: 0.0,
+      offsetEwmaMs: 0.0,
+      offsetDisplayMs: 0.0,
+      offsetDesyncMs: 0.0,
+      lastOffsetUpdateMono: performance.now(),
+      lastRttMs: null,
+      lastOffsetMs: null,
+      samples: []
+    };
+    const runtimeModel = {
+      warningEnabled: false,
+      warningActiveCount: 0,
+      warningPulseMs: 250
+    };
+
+    function pad(n, width) {
+      const s = String(n);
+      return s.length >= width ? s : "0".repeat(width - s.length) + s;
+    }
+    function getDebugClientInstance() {
+      const key = "betterclock_debug_instance";
+      try {
+        const existing = sessionStorage.getItem(key);
+        if (existing && existing.length > 0) {
+          return existing;
+        }
+      } catch (_) {}
+      let suffix = "";
+      if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+        const bytes = new Uint8Array(6);
+        crypto.getRandomValues(bytes);
+        suffix = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      } else {
+        suffix = Math.floor(Math.random() * 1e12).toString(16).padStart(12, "0");
+      }
+      const value = `web-${suffix.slice(0, 10)}`;
+      try {
+        sessionStorage.setItem(key, value);
+      } catch (_) {}
+      return value;
+    }
+    function fmtSigned(v, width, decimals) {
+      if (v == null || Number.isNaN(v)) return "   -.--";
+      const n = Number(v).toFixed(decimals);
+      const signed = (n >= 0 ? "+" : "") + n;
+      return signed.padStart(width, " ");
+    }
+    function fmtHmsFromMs(ms) {
+      const total = Math.max(0, Math.floor(ms / 1000));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      return `${pad(h, 3)}:${pad(m, 2)}:${pad(s, 2)}`;
+    }
+    async function fetchJson(path) {
+      const res = await fetch(path, { headers: { "Accept": "application/json" } });
+      if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+      return res.json();
+    }
+    async function fetchJsonWithTiming(path) {
+      const sendMs = Date.now();
+      const start = performance.now();
+      const res = await fetch(path, { headers: { "Accept": "application/json" } });
+      const end = performance.now();
+      const recvMs = Date.now();
+      if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+      const payload = await res.json();
+      return {
+        payload,
+        rttMs: end - start,
+        sendMs,
+        recvMs
+      };
+    }
+    function buildMetricsQuery() {
+      const params = new URLSearchParams();
+      params.set("client_id", DEBUG_CLIENT_ID);
+      params.set("instance_id", DEBUG_CLIENT_INSTANCE);
+      if (latencyModel.initialized) {
+        params.set("rtt_ms", latencyModel.rttEwmaMs.toFixed(3));
+        params.set("offset_ms", latencyModel.offsetDisplayMs.toFixed(3));
+        params.set("desync_ms", latencyModel.offsetDesyncMs.toFixed(3));
+      }
+      return params.toString();
+    }
+    function parseServerTimestamps(statePayload) {
+      const runtime = statePayload.runtime || {};
+      const requestReceivedMs = Number(statePayload.request_received_unix_ms);
+      let responseSendMs = Number(statePayload.response_send_unix_ms);
+      if (!Number.isFinite(responseSendMs) || responseSendMs <= 0) {
+        responseSendMs = Number(statePayload.response_unix_ms ?? runtime.updated_unix_ms ?? 0);
+      }
+      return {
+        requestReceivedMs: Number.isFinite(requestReceivedMs) && requestReceivedMs > 0 ? requestReceivedMs : null,
+        responseSendMs: Number.isFinite(responseSendMs) && responseSendMs > 0 ? responseSendMs : null
+      };
+    }
+    function computeNetworkSample(statePayload, fallbackRttMs, sendMs, recvMs) {
+      const { requestReceivedMs, responseSendMs } = parseServerTimestamps(statePayload);
+      const t1 = sendMs;
+      const t4 = recvMs;
+      let sampleRttMs = fallbackRttMs;
+      let offsetSampleMs = 0.0;
+      if (requestReceivedMs != null && responseSendMs != null) {
+        const t2 = requestReceivedMs;
+        const t3 = responseSendMs;
+        const correctedRtt = (t4 - t1) - (t3 - t2);
+        sampleRttMs = Number.isFinite(correctedRtt) && correctedRtt >= 0 ? correctedRtt : fallbackRttMs;
+        offsetSampleMs = ((t2 - t1) + (t3 - t4)) / 2.0;
+      } else {
+        const midpointMs = (t1 + t4) / 2.0;
+        const serverMs = responseSendMs != null ? responseSendMs : midpointMs;
+        offsetSampleMs = serverMs - midpointMs;
+      }
+      if (!Number.isFinite(sampleRttMs) || sampleRttMs < 0) {
+        sampleRttMs = fallbackRttMs;
+      }
+      if (!Number.isFinite(offsetSampleMs)) {
+        offsetSampleMs = 0.0;
+      }
+      sampleRttMs = Math.min(Math.max(sampleRttMs, 0.0), 60000.0);
+      offsetSampleMs = Math.min(Math.max(offsetSampleMs, -60000.0), 60000.0);
+      return { sampleRttMs, offsetSampleMs };
+    }
+    function estimateLowJitterTarget(samples) {
+      if (!samples.length) {
+        return { targetRttMs: 0.0, targetOffsetMs: 0.0 };
+      }
+      const sortedByRtt = [...samples].sort((a, b) => a.rttMs - b.rttMs);
+      const bestRttMs = sortedByRtt[0].rttMs;
+      let selected = samples.filter((sample) => sample.rttMs <= bestRttMs + LOW_RTT_HEADROOM_MS);
+      if (selected.length < LOW_RTT_SAMPLE_FLOOR) {
+        selected = sortedByRtt.slice(0, Math.min(sortedByRtt.length, LOW_RTT_SAMPLE_FLOOR));
+      }
+      let weightSum = 0.0;
+      let weightedRtt = 0.0;
+      let weightedOffset = 0.0;
+      for (const sample of selected) {
+        const weight = 1.0 / ((1.0 + sample.rttMs) * (1.0 + sample.rttMs));
+        weightedRtt += sample.rttMs * weight;
+        weightedOffset += sample.offsetMs * weight;
+        weightSum += weight;
+      }
+      if (weightSum <= 0.0) {
+        return { targetRttMs: sortedByRtt[0].rttMs, targetOffsetMs: sortedByRtt[0].offsetMs };
+      }
+      return { targetRttMs: weightedRtt / weightSum, targetOffsetMs: weightedOffset / weightSum };
+    }
+    function updateLatencyModel(statePayload, transportRttMs, sendMs, recvMs) {
+      const { sampleRttMs, offsetSampleMs } = computeNetworkSample(
+        statePayload,
+        transportRttMs,
+        sendMs,
+        recvMs
+      );
+      latencyModel.samples.push({ rttMs: sampleRttMs, offsetMs: offsetSampleMs });
+      if (latencyModel.samples.length > LATENCY_SAMPLE_WINDOW) {
+        latencyModel.samples.splice(0, latencyModel.samples.length - LATENCY_SAMPLE_WINDOW);
+      }
+      const { targetRttMs, targetOffsetMs } = estimateLowJitterTarget(latencyModel.samples);
+      latencyModel.lastRttMs = sampleRttMs;
+      latencyModel.lastOffsetMs = offsetSampleMs;
+      if (!latencyModel.initialized) {
+        latencyModel.rttEwmaMs = targetRttMs;
+        latencyModel.offsetEwmaMs = targetOffsetMs;
+        latencyModel.offsetDisplayMs = targetOffsetMs;
+        latencyModel.lastOffsetUpdateMono = performance.now();
+        latencyModel.initialized = true;
+        return;
+      }
+      const bestRttMs = Math.min(...latencyModel.samples.map((sample) => sample.rttMs));
+      const alphaOffset = sampleRttMs <= bestRttMs + 3.0 ? 0.34 : 0.16;
+      const alphaRtt = 0.25;
+      latencyModel.rttEwmaMs =
+        (1.0 - alphaRtt) * latencyModel.rttEwmaMs + alphaRtt * targetRttMs;
+      latencyModel.offsetEwmaMs =
+        (1.0 - alphaOffset) * latencyModel.offsetEwmaMs + alphaOffset * targetOffsetMs;
+
+      const nowMono = performance.now();
+      const deltaSeconds = Math.max(0.001, (nowMono - latencyModel.lastOffsetUpdateMono) / 1000.0);
+      latencyModel.lastOffsetUpdateMono = nowMono;
+      const maxStepMs = OFFSET_SLEW_RATE_MS_PER_SEC * deltaSeconds;
+      const desyncMs = targetOffsetMs - latencyModel.offsetDisplayMs;
+      latencyModel.offsetDesyncMs = desyncMs;
+      const desyncGain = sampleRttMs <= bestRttMs + 3.0
+        ? OFFSET_DESYNC_GAIN_FAST
+        : OFFSET_DESYNC_GAIN_SLOW;
+      let stepMs = desyncMs * desyncGain;
+      if (Math.abs(stepMs) > maxStepMs) {
+        stepMs = stepMs > 0 ? maxStepMs : -maxStepMs;
+      }
+      latencyModel.offsetDisplayMs += stepMs;
+    }
+    function reqPerSec(client, nowMs) {
+      const connMs = Math.max(100, nowMs - (client.first_seen_unix_ms || nowMs));
+      return client.request_count / (connMs / 1000.0);
+    }
+    function formatClock12h(serverNowMs) {
+      const dt = new Date(serverNowMs);
+      let hour = dt.getHours();
+      const minute = dt.getMinutes();
+      const second = dt.getSeconds();
+      const meridiem = hour >= 12 ? "PM" : "AM";
+      hour = hour % 12;
+      if (hour === 0) hour = 12;
+      return `${pad(hour, 2)}:${pad(minute, 2)}:${pad(second, 2)} ${meridiem}`;
+    }
+    function estimateServerNowMs(clientNowMs) {
+      if (latencyModel.initialized) {
+        return clientNowMs + latencyModel.offsetDisplayMs;
+      }
+      return clientNowMs;
+    }
+    function applyWarningPulse(serverNowMs) {
+      const warningActive =
+        runtimeModel.warningEnabled && runtimeModel.warningActiveCount > 0;
+      const pulseMs = Math.max(80, Number(runtimeModel.warningPulseMs || 250));
+      const localPulseOn =
+        warningActive && Math.floor(serverNowMs / pulseMs) % 2 === 0;
+      document.body.classList.toggle("pulse-soft", warningActive);
+      document.body.classList.toggle("pulse-on", localPulseOn);
+      document.getElementById("clock").classList.toggle("clock-warn", warningActive);
+    }
+    function renderTick() {
+      const nowClientMs = Date.now();
+      const serverNowMs = estimateServerNowMs(nowClientMs);
+      document.getElementById("clock").textContent = formatClock12h(serverNowMs);
+      applyWarningPulse(serverNowMs);
+    }
+    async function refresh() {
+      try {
+        const stateTiming = await fetchJsonWithTiming(`/v1/state?${buildMetricsQuery()}`);
+        updateLatencyModel(
+          stateTiming.payload,
+          stateTiming.rttMs,
+          stateTiming.sendMs,
+          stateTiming.recvMs
+        );
+        const clientsPayload = await fetchJson(`/v1/clients?${buildMetricsQuery()}`);
+        const state = stateTiming.payload;
+        const runtime = state.runtime || {};
+        const nowStamp = new Date();
+        runtimeModel.warningEnabled = Boolean(runtime.warning_enabled);
+        runtimeModel.warningActiveCount = Number(runtime.warning_active_count ?? 0);
+        runtimeModel.warningPulseMs = Number(runtime.warning_pulse_time_ms ?? 250);
+
+        document.getElementById("stamp").textContent =
+          `updated ${nowStamp.toLocaleString()} | clients=${pad(state.clients_seen ?? 0, 3)} | total_req=${pad(state.total_requests ?? 0, 8)} | id=${DEBUG_CLIENT_ID} | inst=${DEBUG_CLIENT_INSTANCE} | web_rtt=${latencyModel.rttEwmaMs.toFixed(1)}ms | web_offset=${latencyModel.offsetDisplayMs.toFixed(1)}ms | web_desync=${latencyModel.offsetDesyncMs.toFixed(1)}ms`;
+        document.getElementById("runtime").textContent =
+`source: ${String(runtime.source_label || "").padEnd(14, " ")}
+warning_enabled: ${runtime.warning_enabled ? "ON " : "OFF"}
+warning_active : ${pad(runtime.warning_active_count ?? 0, 3)}
+warning_pulse  : ${runtime.warning_pulse_on ? "ON " : "OFF"}
+armed          : ${pad(runtime.armed_count ?? 0, 4)}
+triggered      : ${pad(runtime.triggered_count ?? 0, 4)}
+lead_ms        : ${pad(runtime.warning_lead_time_ms ?? 0, 6)}
+pulse_ms       : ${pad(runtime.warning_pulse_time_ms ?? 0, 6)}`;
+        const tbody = document.getElementById("clients");
+        tbody.innerHTML = "";
+        const nowMs = Date.now();
+        for (const client of (clientsPayload.clients || [])) {
+          const tr = document.createElement("tr");
+          const ping = client.last_rtt_ms == null ? "   -.--" : Number(client.last_rtt_ms).toFixed(1).padStart(7, " ");
+          const offset = fmtSigned(client.last_offset_ms, 8, 1);
+          const desync = fmtSigned(client.last_desync_ms, 8, 1);
+          const rps = reqPerSec(client, nowMs).toFixed(1).padStart(6, "0");
+          const conn = fmtHmsFromMs(nowMs - (client.first_seen_unix_ms || nowMs));
+          tr.innerHTML = `
+            <td>${client.id || ""}</td>
+            <td>${client.instance_id || "default"}</td>
+            <td>${client.ip || ""}</td>
+            <td>${ping}</td>
+            <td>${offset}</td>
+            <td>${desync}</td>
+            <td>${rps}</td>
+            <td>${conn}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+      } catch (err) {
+        document.body.classList.remove("pulse-soft", "pulse-on");
+        const clockEl = document.getElementById("clock");
+        clockEl.classList.remove("clock-warn");
+        runtimeModel.warningEnabled = false;
+        runtimeModel.warningActiveCount = 0;
+        document.getElementById("stamp").innerHTML = `<span class="bad">${String(err)}</span>`;
+      }
+    }
+    renderTick();
+    refresh();
+    setInterval(renderTick, UI_TICK_MS);
+    setInterval(refresh, STATE_POLL_MS);
+  </script>
+</body>
+</html>

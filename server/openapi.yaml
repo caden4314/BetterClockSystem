@@ -1,0 +1,551 @@
+openapi: 3.0.3
+info:
+  title: BetterClock Local API
+  version: 1.0.0
+  description: |
+    Local-network API exposed by BetterClock server.
+
+    Notes:
+    - GET-only API.
+    - Requests are accepted only from loopback/private/link-local addresses.
+    - No API key/auth is required.
+servers:
+  - url: http://127.0.0.1:8099
+    description: Local default
+tags:
+  - name: State
+  - name: Clients
+  - name: Health
+  - name: Runtime
+  - name: Session
+  - name: Debug
+paths:
+  /v1:
+    get:
+      tags: [State]
+      summary: API discovery index
+      description: Returns absolute URLs for key API routes.
+      responses:
+        "200":
+          description: API route index
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiIndexResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /:
+    get:
+      tags: [State]
+      summary: State alias
+      description: Same response as `/v1/state`.
+      parameters:
+        - $ref: "#/components/parameters/client_id_query"
+        - $ref: "#/components/parameters/instance_id_query"
+        - $ref: "#/components/parameters/rtt_ms_query"
+        - $ref: "#/components/parameters/offset_ms_query"
+        - $ref: "#/components/parameters/desync_ms_query"
+        - $ref: "#/components/parameters/client_id_header"
+        - $ref: "#/components/parameters/instance_id_header"
+        - $ref: "#/components/parameters/rtt_ms_header"
+        - $ref: "#/components/parameters/offset_ms_header"
+        - $ref: "#/components/parameters/desync_ms_header"
+      responses:
+        "200":
+          description: Server runtime/state snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/state:
+    get:
+      tags: [State]
+      summary: Get server state
+      parameters:
+        - $ref: "#/components/parameters/client_id_query"
+        - $ref: "#/components/parameters/instance_id_query"
+        - $ref: "#/components/parameters/rtt_ms_query"
+        - $ref: "#/components/parameters/offset_ms_query"
+        - $ref: "#/components/parameters/desync_ms_query"
+        - $ref: "#/components/parameters/client_id_header"
+        - $ref: "#/components/parameters/instance_id_header"
+        - $ref: "#/components/parameters/rtt_ms_header"
+        - $ref: "#/components/parameters/offset_ms_header"
+        - $ref: "#/components/parameters/desync_ms_header"
+      responses:
+        "200":
+          description: Server runtime/state snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/clients:
+    get:
+      tags: [Clients]
+      summary: Get connected clients
+      parameters:
+        - $ref: "#/components/parameters/client_id_query"
+        - $ref: "#/components/parameters/instance_id_query"
+        - $ref: "#/components/parameters/rtt_ms_query"
+        - $ref: "#/components/parameters/offset_ms_query"
+        - $ref: "#/components/parameters/desync_ms_query"
+        - $ref: "#/components/parameters/client_id_header"
+        - $ref: "#/components/parameters/instance_id_header"
+        - $ref: "#/components/parameters/rtt_ms_header"
+        - $ref: "#/components/parameters/offset_ms_header"
+        - $ref: "#/components/parameters/desync_ms_header"
+      responses:
+        "200":
+          description: Active clients list (within server TTL window)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/client/code:
+    get:
+      tags: [Runtime]
+      summary: Get embedded Python client runtime code
+      responses:
+        "200":
+          description: Python runtime source code
+          content:
+            text/x-python:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/client/disconnect:
+    get:
+      tags: [Session]
+      summary: Disconnect current client session
+      description: Removes this `client_id + instance_id` from active server client tracking.
+      parameters:
+        - $ref: "#/components/parameters/client_id_query"
+        - $ref: "#/components/parameters/instance_id_query"
+        - $ref: "#/components/parameters/client_id_header"
+        - $ref: "#/components/parameters/instance_id_header"
+      responses:
+        "200":
+          description: Disconnect result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisconnectResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /openapi.yaml:
+    get:
+      tags: [Debug]
+      summary: OpenAPI spec
+      responses:
+        "200":
+          description: OpenAPI YAML
+          content:
+            application/yaml:
+              schema:
+                type: string
+            text/yaml:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /debug:
+    get:
+      tags: [Debug]
+      summary: Get debug web UI HTML
+      description: Returns 404 when debug UI is disabled on the server.
+      responses:
+        "200":
+          description: Debug HTML page
+          content:
+            text/html:
+              schema:
+                type: string
+        "404":
+          description: Debug UI disabled or route not found
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: debug web ui is disabled on the server
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+components:
+  parameters:
+    client_id_query:
+      name: client_id
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Client identifier (fallback is remote IP).
+    instance_id_query:
+      name: instance_id
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Client instance identifier (fallback is `default`).
+    rtt_ms_query:
+      name: rtt_ms
+      in: query
+      required: false
+      schema:
+        type: number
+        format: double
+        minimum: 0
+        maximum: 60000
+      description: Client RTT metric in ms.
+    offset_ms_query:
+      name: offset_ms
+      in: query
+      required: false
+      schema:
+        type: number
+        format: double
+        minimum: -60000
+        maximum: 60000
+      description: Client offset metric in ms.
+    desync_ms_query:
+      name: desync_ms
+      in: query
+      required: false
+      schema:
+        type: number
+        format: double
+        minimum: -60000
+        maximum: 60000
+      description: Client desync metric in ms.
+    client_id_header:
+      name: X-Client-Id
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Header alternative to `client_id`.
+    instance_id_header:
+      name: X-Client-Instance
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Header alternative to `instance_id`.
+    rtt_ms_header:
+      name: X-Client-Rtt-Ms
+      in: header
+      required: false
+      schema:
+        type: number
+        format: double
+      description: Header alternative to `rtt_ms`.
+    offset_ms_header:
+      name: X-Client-Offset-Ms
+      in: header
+      required: false
+      schema:
+        type: number
+        format: double
+      description: Header alternative to `offset_ms`.
+    desync_ms_header:
+      name: X-Client-Desync-Ms
+      in: header
+      required: false
+      schema:
+        type: number
+        format: double
+      description: Header alternative to `desync_ms`.
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: missing remote address
+    Forbidden:
+      description: Request denied (local network only)
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: forbidden: local network only
+    MethodNotAllowed:
+      description: Only GET is supported
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: method not allowed
+    InternalError:
+      description: Internal state lock failure
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: internal state lock error
+
+  schemas:
+    RuntimeSnapshot:
+      type: object
+      required:
+        - iso_local
+        - hour
+        - minute
+        - second
+        - source_label
+        - warning_enabled
+        - warning_active_count
+        - warning_pulse_on
+        - warning_lead_time_ms
+        - warning_pulse_time_ms
+        - triggered_count
+        - armed_count
+        - updated_unix_ms
+      properties:
+        iso_local:
+          type: string
+        hour:
+          type: integer
+          format: uint32
+        minute:
+          type: integer
+          format: uint32
+        second:
+          type: integer
+          format: uint32
+        source_label:
+          type: string
+        warning_enabled:
+          type: boolean
+        warning_active_count:
+          type: integer
+          format: uint64
+        warning_pulse_on:
+          type: boolean
+        warning_lead_time_ms:
+          type: integer
+          format: uint64
+        warning_pulse_time_ms:
+          type: integer
+          format: uint64
+        triggered_count:
+          type: integer
+          format: uint64
+        armed_count:
+          type: integer
+          format: uint64
+        updated_unix_ms:
+          type: integer
+          format: int64
+
+    PublicClient:
+      type: object
+      required:
+        - id
+        - instance_id
+        - debug_mode
+        - ip
+        - request_count
+        - first_seen_unix_ms
+        - last_seen_unix_ms
+      properties:
+        id:
+          type: string
+        instance_id:
+          type: string
+        debug_mode:
+          type: boolean
+        ip:
+          type: string
+        request_count:
+          type: integer
+          format: uint64
+        first_seen_unix_ms:
+          type: integer
+          format: int64
+        last_seen_unix_ms:
+          type: integer
+          format: int64
+        last_rtt_ms:
+          type: number
+          format: double
+          nullable: true
+        last_offset_ms:
+          type: number
+          format: double
+          nullable: true
+        last_desync_ms:
+          type: number
+          format: double
+          nullable: true
+
+    StateResponse:
+      type: object
+      required:
+        - runtime
+        - clients_seen
+        - total_requests
+        - client_debug_mode
+        - request_received_unix_ms
+        - response_unix_ms
+        - response_send_unix_ms
+        - server_processing_ms
+        - response_iso_local
+      properties:
+        runtime:
+          $ref: "#/components/schemas/RuntimeSnapshot"
+        clients_seen:
+          type: integer
+          format: uint64
+        total_requests:
+          type: integer
+          format: uint64
+        client_debug_mode:
+          type: boolean
+        request_received_unix_ms:
+          type: integer
+          format: int64
+        response_unix_ms:
+          type: integer
+          format: int64
+        response_send_unix_ms:
+          type: integer
+          format: int64
+        server_processing_ms:
+          type: integer
+          format: int64
+        response_iso_local:
+          type: string
+
+    ClientsResponse:
+      type: object
+      required:
+        - count
+        - clients
+      properties:
+        count:
+          type: integer
+          format: uint64
+        clients:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublicClient"
+
+    ApiIndexResponse:
+      type: object
+      required:
+        - api_base
+        - state_url
+        - clients_url
+        - health_url
+        - runtime_code_url
+        - disconnect_url
+        - debug_url
+        - openapi_url
+      properties:
+        api_base:
+          type: string
+        state_url:
+          type: string
+        clients_url:
+          type: string
+        health_url:
+          type: string
+        runtime_code_url:
+          type: string
+        disconnect_url:
+          type: string
+        debug_url:
+          type: string
+        openapi_url:
+          type: string
+
+    DisconnectResponse:
+      type: object
+      required:
+        - disconnected
+        - client_id
+        - instance_id
+      properties:
+        disconnected:
+          type: boolean
+        client_id:
+          type: string
+        instance_id:
+          type: string

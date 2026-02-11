@@ -1,0 +1,250 @@
+{
+  "alarms": [
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-1-start",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "08:25:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-1-end",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "09:15:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-2-start",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "09:20:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-2-end",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "10:10:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-3-start",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "10:15:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-3-end",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "11:05:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-4-start",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "11:10:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "lunch-start",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "12:00:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "lunch-end",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "12:35:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-5-start",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "12:40:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-5-end",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "13:30:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-6-start",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "13:35:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-6-end",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "14:25:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-7-start",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "14:30:00.000000000"
+    },
+    {
+      "auto_acknowledge": false,
+      "days_of_week": [
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri"
+      ],
+      "enabled": true,
+      "id": "period-7-end",
+      "kind": "recurring",
+      "late_trigger_ms": 0,
+      "ring_duration_ms": 5000,
+      "time_local": "15:15:00.000000000"
+    }
+  ],
+  "settings": {
+    "warning_enabled": true,
+    "warning_lead_time_ms": 30000,
+    "warning_pulse_time_ms": 1000
+  },
+  "version": 1
+}

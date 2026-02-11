@@ -1,0 +1,17 @@
+# Rust build outputs
+**/target/
+
+# Python caches and packaging artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/*.egg-info/
+
+# Local editor settings
+.vscode/
+
+# Local toolchain downloads (too large for git)
+tools/zig/
+tools/zig-*/
+tools/zig*.zip
