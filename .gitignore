@@ -15,3 +15,6 @@
 tools/zig/
 tools/zig-*/
 tools/zig*.zip
+
+# Release bundles are distributed via GitHub Releases, not git history.
+build/releases/
