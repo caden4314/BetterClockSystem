@@ -21,3 +21,6 @@ build/releases/
 
 # Random UI thing.
 ui
+
+# Keys
+.keys
