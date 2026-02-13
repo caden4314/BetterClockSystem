@@ -48,6 +48,15 @@ pub struct PublicClient {
     pub last_rtt_ms: Option<f64>,
     pub last_offset_ms: Option<f64>,
     pub last_desync_ms: Option<f64>,
+    pub first_in_unix_ms: i64,
+    pub last_in_unix_ms: i64,
+    pub last_out_unix_ms: i64,
+    pub last_in_bytes: u64,
+    pub last_out_bytes: u64,
+    pub total_in_bytes: u64,
+    pub total_out_bytes: u64,
+    pub in_bytes_per_sec: f64,
+    pub out_bytes_per_sec: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -62,34 +71,90 @@ struct ClientRecord {
     last_rtt_ms: Option<f64>,
     last_offset_ms: Option<f64>,
     last_desync_ms: Option<f64>,
+    first_in_unix_ms: i64,
+    last_in_unix_ms: i64,
+    last_out_unix_ms: i64,
+    last_in_bytes: u64,
+    last_out_bytes: u64,
+    total_in_bytes: u64,
+    total_out_bytes: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ApiSharedState {
     pub runtime: RuntimeSnapshot,
     clients: HashMap<String, ClientRecord>,
     total_requests: u64,
+    total_in_bytes: u64,
+    total_out_bytes: u64,
+    server_started_unix_ms: i64,
+    session_first_in_unix_ms: i64,
+    session_last_in_unix_ms: i64,
+    session_last_out_unix_ms: i64,
     debug_ui_enabled: bool,
 }
 
+impl Default for ApiSharedState {
+    fn default() -> Self {
+        Self {
+            runtime: RuntimeSnapshot::default(),
+            clients: HashMap::new(),
+            total_requests: 0,
+            total_in_bytes: 0,
+            total_out_bytes: 0,
+            server_started_unix_ms: Local::now().timestamp_millis(),
+            session_first_in_unix_ms: 0,
+            session_last_in_unix_ms: 0,
+            session_last_out_unix_ms: 0,
+            debug_ui_enabled: false,
+        }
+    }
+}
+
 impl ApiSharedState {
+    fn compute_bytes_per_sec(total_bytes: u64, start_unix_ms: i64, now_unix_ms: i64) -> f64 {
+        if start_unix_ms <= 0 {
+            return 0.0;
+        }
+        let elapsed_ms = now_unix_ms.saturating_sub(start_unix_ms);
+        if elapsed_ms <= 0 {
+            return 0.0;
+        }
+        (total_bytes as f64 * 1000.0) / elapsed_ms as f64
+    }
+
     pub fn connected_clients(&self, now_ms: i64, ttl_ms: i64) -> Vec<PublicClient> {
         let mut clients = self
             .clients
             .values()
             .filter(|client| now_ms.saturating_sub(client.last_seen_unix_ms) <= ttl_ms)
             .cloned()
-            .map(|entry| PublicClient {
-                id: entry.id,
-                instance_id: entry.instance_id,
-                debug_mode: entry.debug_mode,
-                ip: entry.ip,
-                request_count: entry.request_count,
-                first_seen_unix_ms: entry.first_seen_unix_ms,
-                last_seen_unix_ms: entry.last_seen_unix_ms,
-                last_rtt_ms: entry.last_rtt_ms,
-                last_offset_ms: entry.last_offset_ms,
-                last_desync_ms: entry.last_desync_ms,
+            .map(|entry| {
+                let in_bytes_per_sec =
+                    Self::compute_bytes_per_sec(entry.total_in_bytes, entry.first_seen_unix_ms, now_ms);
+                let out_bytes_per_sec =
+                    Self::compute_bytes_per_sec(entry.total_out_bytes, entry.first_seen_unix_ms, now_ms);
+                PublicClient {
+                    id: entry.id,
+                    instance_id: entry.instance_id,
+                    debug_mode: entry.debug_mode,
+                    ip: entry.ip,
+                    request_count: entry.request_count,
+                    first_seen_unix_ms: entry.first_seen_unix_ms,
+                    last_seen_unix_ms: entry.last_seen_unix_ms,
+                    last_rtt_ms: entry.last_rtt_ms,
+                    last_offset_ms: entry.last_offset_ms,
+                    last_desync_ms: entry.last_desync_ms,
+                    first_in_unix_ms: entry.first_in_unix_ms,
+                    last_in_unix_ms: entry.last_in_unix_ms,
+                    last_out_unix_ms: entry.last_out_unix_ms,
+                    last_in_bytes: entry.last_in_bytes,
+                    last_out_bytes: entry.last_out_bytes,
+                    total_in_bytes: entry.total_in_bytes,
+                    total_out_bytes: entry.total_out_bytes,
+                    in_bytes_per_sec,
+                    out_bytes_per_sec,
+                }
             })
             .collect::<Vec<_>>();
         clients.sort_by(|a, b| {
@@ -106,6 +171,38 @@ impl ApiSharedState {
 
     pub fn total_requests(&self) -> u64 {
         self.total_requests
+    }
+
+    pub fn total_in_bytes(&self) -> u64 {
+        self.total_in_bytes
+    }
+
+    pub fn total_out_bytes(&self) -> u64 {
+        self.total_out_bytes
+    }
+
+    pub fn server_started_unix_ms(&self) -> i64 {
+        self.server_started_unix_ms
+    }
+
+    pub fn session_first_in_unix_ms(&self) -> i64 {
+        self.session_first_in_unix_ms
+    }
+
+    pub fn session_last_in_unix_ms(&self) -> i64 {
+        self.session_last_in_unix_ms
+    }
+
+    pub fn session_last_out_unix_ms(&self) -> i64 {
+        self.session_last_out_unix_ms
+    }
+
+    pub fn session_in_bytes_per_sec(&self, now_ms: i64) -> f64 {
+        Self::compute_bytes_per_sec(self.total_in_bytes, self.session_first_in_unix_ms, now_ms)
+    }
+
+    pub fn session_out_bytes_per_sec(&self, now_ms: i64) -> f64 {
+        Self::compute_bytes_per_sec(self.total_out_bytes, self.session_first_in_unix_ms, now_ms)
     }
 
     pub fn client_debug_mode(&self, client_id: &str, instance_id: &str) -> Option<bool> {
@@ -373,6 +470,7 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
         return;
     }
     let request_received_unix_ms = Local::now().timestamp_millis();
+    let request_in_bytes = estimate_request_bytes(&request);
 
     let url = request.url().to_string();
     let (path, query) = split_path_query(&url);
@@ -392,12 +490,15 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
         }
     };
     let is_disconnect_route = path == "/v1/client/disconnect";
+    record_server_inbound(&mut guard, request_received_unix_ms, request_in_bytes);
     if !is_disconnect_route {
         register_client(
             &mut guard,
             &client_id,
             &client_instance,
             remote_ip,
+            request_received_unix_ms,
+            request_in_bytes,
             client_rtt_ms,
             client_offset_ms,
             client_desync_ms,
@@ -435,7 +536,19 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
                 openapi_url: format!("{base_url}/openapi.yaml"),
                 api_base: base_url,
             };
+            let response_out_bytes = json_payload_len(&payload);
             let _ = send_json(request, StatusCode(200), &payload);
+            let response_send_unix_ms = Local::now().timestamp_millis();
+            record_server_outbound(&mut guard, response_send_unix_ms, response_out_bytes);
+            if !is_disconnect_route {
+                register_client_response(
+                    &mut guard,
+                    &client_id,
+                    &client_instance,
+                    response_send_unix_ms,
+                    response_out_bytes,
+                );
+            }
         }
         "/" | "/v1/state" => {
             #[derive(Serialize)]
@@ -443,6 +556,14 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
                 runtime: RuntimeSnapshot,
                 clients_seen: usize,
                 total_requests: u64,
+                total_in_bytes: u64,
+                total_out_bytes: u64,
+                session_in_bytes_per_sec: f64,
+                session_out_bytes_per_sec: f64,
+                server_started_unix_ms: i64,
+                session_first_in_unix_ms: i64,
+                session_last_in_unix_ms: i64,
+                session_last_out_unix_ms: i64,
                 client_debug_mode: bool,
                 request_received_unix_ms: i64,
                 response_unix_ms: i64,
@@ -461,6 +582,14 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
                 runtime: guard.runtime.clone(),
                 clients_seen: connected_clients.len(),
                 total_requests: guard.total_requests(),
+                total_in_bytes: guard.total_in_bytes(),
+                total_out_bytes: guard.total_out_bytes(),
+                session_in_bytes_per_sec: guard.session_in_bytes_per_sec(response_send_unix_ms),
+                session_out_bytes_per_sec: guard.session_out_bytes_per_sec(response_send_unix_ms),
+                server_started_unix_ms: guard.server_started_unix_ms(),
+                session_first_in_unix_ms: guard.session_first_in_unix_ms(),
+                session_last_in_unix_ms: guard.session_last_in_unix_ms(),
+                session_last_out_unix_ms: guard.session_last_out_unix_ms(),
                 client_debug_mode: requester_debug_mode,
                 request_received_unix_ms,
                 response_unix_ms: response_send_unix_ms,
@@ -469,7 +598,19 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
                     .saturating_sub(request_received_unix_ms),
                 response_iso_local: response_now.to_rfc3339(),
             };
+            let response_out_bytes = json_payload_len(&payload);
             let _ = send_json(request, StatusCode(200), &payload);
+            let response_send_unix_ms = Local::now().timestamp_millis();
+            record_server_outbound(&mut guard, response_send_unix_ms, response_out_bytes);
+            if !is_disconnect_route {
+                register_client_response(
+                    &mut guard,
+                    &client_id,
+                    &client_instance,
+                    response_send_unix_ms,
+                    response_out_bytes,
+                );
+            }
         }
         "/v1/clients" => {
             #[derive(Serialize)]
@@ -487,13 +628,49 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
                 count: clients.len(),
                 clients,
             };
+            let response_out_bytes = json_payload_len(&payload);
             let _ = send_json(request, StatusCode(200), &payload);
+            let response_send_unix_ms = Local::now().timestamp_millis();
+            record_server_outbound(&mut guard, response_send_unix_ms, response_out_bytes);
+            if !is_disconnect_route {
+                register_client_response(
+                    &mut guard,
+                    &client_id,
+                    &client_instance,
+                    response_send_unix_ms,
+                    response_out_bytes,
+                );
+            }
         }
         "/healthz" => {
             let _ = send_text(request, StatusCode(200), "ok");
+            let response_out_bytes = "ok".len() as u64;
+            let response_send_unix_ms = Local::now().timestamp_millis();
+            record_server_outbound(&mut guard, response_send_unix_ms, response_out_bytes);
+            if !is_disconnect_route {
+                register_client_response(
+                    &mut guard,
+                    &client_id,
+                    &client_instance,
+                    response_send_unix_ms,
+                    response_out_bytes,
+                );
+            }
         }
         "/v1/client/code" => {
             let _ = send_python(request, StatusCode(200), CLIENT_RUNTIME_CODE);
+            let response_out_bytes = CLIENT_RUNTIME_CODE.len() as u64;
+            let response_send_unix_ms = Local::now().timestamp_millis();
+            record_server_outbound(&mut guard, response_send_unix_ms, response_out_bytes);
+            if !is_disconnect_route {
+                register_client_response(
+                    &mut guard,
+                    &client_id,
+                    &client_instance,
+                    response_send_unix_ms,
+                    response_out_bytes,
+                );
+            }
         }
         "/v1/client/disconnect" => {
             #[derive(Serialize)]
@@ -509,24 +686,77 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
                 client_id,
                 instance_id: client_instance,
             };
+            let response_out_bytes = json_payload_len(&payload);
             let _ = send_json(request, StatusCode(200), &payload);
+            let response_send_unix_ms = Local::now().timestamp_millis();
+            record_server_outbound(&mut guard, response_send_unix_ms, response_out_bytes);
         }
         "/openapi.yaml" => {
             let _ = send_yaml(request, StatusCode(200), OPENAPI_YAML);
+            let response_out_bytes = OPENAPI_YAML.len() as u64;
+            let response_send_unix_ms = Local::now().timestamp_millis();
+            record_server_outbound(&mut guard, response_send_unix_ms, response_out_bytes);
+            if !is_disconnect_route {
+                register_client_response(
+                    &mut guard,
+                    &client_id,
+                    &client_instance,
+                    response_send_unix_ms,
+                    response_out_bytes,
+                );
+            }
         }
         "/debug" => {
             if guard.debug_ui_enabled() {
                 let _ = send_html(request, StatusCode(200), DEBUG_UI_HTML);
+                let response_out_bytes = DEBUG_UI_HTML.len() as u64;
+                let response_send_unix_ms = Local::now().timestamp_millis();
+                record_server_outbound(&mut guard, response_send_unix_ms, response_out_bytes);
+                if !is_disconnect_route {
+                    register_client_response(
+                        &mut guard,
+                        &client_id,
+                        &client_instance,
+                        response_send_unix_ms,
+                        response_out_bytes,
+                    );
+                }
             } else {
+                let disabled_text = "debug web ui is disabled on the server";
                 let _ = send_text(
                     request,
                     StatusCode(404),
-                    "debug web ui is disabled on the server",
+                    disabled_text,
                 );
+                let response_out_bytes = disabled_text.len() as u64;
+                let response_send_unix_ms = Local::now().timestamp_millis();
+                record_server_outbound(&mut guard, response_send_unix_ms, response_out_bytes);
+                if !is_disconnect_route {
+                    register_client_response(
+                        &mut guard,
+                        &client_id,
+                        &client_instance,
+                        response_send_unix_ms,
+                        response_out_bytes,
+                    );
+                }
             }
         }
         _ => {
-            let _ = send_text(request, StatusCode(404), "not found");
+            let not_found_text = "not found";
+            let _ = send_text(request, StatusCode(404), not_found_text);
+            let response_out_bytes = not_found_text.len() as u64;
+            let response_send_unix_ms = Local::now().timestamp_millis();
+            record_server_outbound(&mut guard, response_send_unix_ms, response_out_bytes);
+            if !is_disconnect_route {
+                register_client_response(
+                    &mut guard,
+                    &client_id,
+                    &client_instance,
+                    response_send_unix_ms,
+                    response_out_bytes,
+                );
+            }
         }
     }
 }
@@ -536,11 +766,12 @@ fn register_client(
     client_id: &str,
     client_instance: &str,
     remote_ip: IpAddr,
+    request_received_unix_ms: i64,
+    request_in_bytes: u64,
     client_rtt_ms: Option<f64>,
     client_offset_ms: Option<f64>,
     client_desync_ms: Option<f64>,
 ) {
-    let now_ms = Local::now().timestamp_millis();
     state.total_requests = state.total_requests.saturating_add(1);
 
     let key = client_key(client_id, client_instance);
@@ -550,15 +781,25 @@ fn register_client(
         debug_mode: false,
         ip: remote_ip.to_string(),
         request_count: 0,
-        first_seen_unix_ms: now_ms,
-        last_seen_unix_ms: now_ms,
+        first_seen_unix_ms: request_received_unix_ms,
+        last_seen_unix_ms: request_received_unix_ms,
         last_rtt_ms: client_rtt_ms,
         last_offset_ms: client_offset_ms,
         last_desync_ms: client_desync_ms,
+        first_in_unix_ms: request_received_unix_ms,
+        last_in_unix_ms: request_received_unix_ms,
+        last_out_unix_ms: 0,
+        last_in_bytes: 0,
+        last_out_bytes: 0,
+        total_in_bytes: 0,
+        total_out_bytes: 0,
     });
     entry.ip = remote_ip.to_string();
     entry.request_count = entry.request_count.saturating_add(1);
-    entry.last_seen_unix_ms = now_ms;
+    entry.last_seen_unix_ms = request_received_unix_ms;
+    entry.last_in_unix_ms = request_received_unix_ms;
+    entry.last_in_bytes = request_in_bytes;
+    entry.total_in_bytes = entry.total_in_bytes.saturating_add(request_in_bytes);
     if let Some(rtt_ms) = client_rtt_ms {
         entry.last_rtt_ms = Some(rtt_ms);
     }
@@ -568,6 +809,59 @@ fn register_client(
     if let Some(desync_ms) = client_desync_ms {
         entry.last_desync_ms = Some(desync_ms);
     }
+}
+
+fn register_client_response(
+    state: &mut ApiSharedState,
+    client_id: &str,
+    client_instance: &str,
+    response_send_unix_ms: i64,
+    response_out_bytes: u64,
+) {
+    let key = client_key(client_id, client_instance);
+    if let Some(entry) = state.clients.get_mut(&key) {
+        entry.last_out_unix_ms = response_send_unix_ms;
+        entry.last_out_bytes = response_out_bytes;
+        entry.total_out_bytes = entry.total_out_bytes.saturating_add(response_out_bytes);
+    }
+}
+
+fn record_server_inbound(state: &mut ApiSharedState, now_ms: i64, bytes: u64) {
+    state.total_in_bytes = state.total_in_bytes.saturating_add(bytes);
+    if state.session_first_in_unix_ms == 0 {
+        state.session_first_in_unix_ms = now_ms;
+    }
+    state.session_last_in_unix_ms = now_ms;
+}
+
+fn record_server_outbound(state: &mut ApiSharedState, now_ms: i64, bytes: u64) {
+    state.total_out_bytes = state.total_out_bytes.saturating_add(bytes);
+    state.session_last_out_unix_ms = now_ms;
+}
+
+fn estimate_request_bytes(request: &tiny_http::Request) -> u64 {
+    let mut total = 0usize;
+    total = total.saturating_add(3); // GET
+    total = total.saturating_add(1); // space
+    total = total.saturating_add(request.url().len());
+    total = total.saturating_add(1); // space
+    total = total.saturating_add("HTTP/1.1\r\n".len());
+    for header in request.headers() {
+        let field = format!("{}", header.field);
+        let value = header.value.as_str();
+        total = total.saturating_add(field.len());
+        total = total.saturating_add(2); // ": "
+        total = total.saturating_add(value.len());
+        total = total.saturating_add(2); // CRLF
+    }
+    total = total.saturating_add(2); // final CRLF
+    total as u64
+}
+
+fn json_payload_len<T: Serialize>(payload: &T) -> u64 {
+    serde_json::to_vec(payload)
+        .map(|body| body.len() as u64)
+        .unwrap_or(0)
 }
 
 fn client_key(client_id: &str, instance_id: &str) -> String {
@@ -851,6 +1145,13 @@ mod tests {
                 last_rtt_ms: None,
                 last_offset_ms: None,
                 last_desync_ms: None,
+                first_in_unix_ms: now_ms,
+                last_in_unix_ms: now_ms,
+                last_out_unix_ms: now_ms,
+                last_in_bytes: 0,
+                last_out_bytes: 0,
+                total_in_bytes: 0,
+                total_out_bytes: 0,
             },
         );
 
@@ -876,6 +1177,13 @@ mod tests {
                 last_rtt_ms: None,
                 last_offset_ms: None,
                 last_desync_ms: None,
+                first_in_unix_ms: now_ms,
+                last_in_unix_ms: now_ms,
+                last_out_unix_ms: now_ms,
+                last_in_bytes: 0,
+                last_out_bytes: 0,
+                total_in_bytes: 0,
+                total_out_bytes: 0,
             },
         );
 
@@ -934,6 +1242,13 @@ mod tests {
                 last_rtt_ms: None,
                 last_offset_ms: None,
                 last_desync_ms: None,
+                first_in_unix_ms: now_ms - 2_000,
+                last_in_unix_ms: now_ms - 10,
+                last_out_unix_ms: now_ms - 10,
+                last_in_bytes: 0,
+                last_out_bytes: 0,
+                total_in_bytes: 0,
+                total_out_bytes: 0,
             },
         );
         state.clients.insert(
@@ -949,6 +1264,13 @@ mod tests {
                 last_rtt_ms: None,
                 last_offset_ms: None,
                 last_desync_ms: None,
+                first_in_unix_ms: now_ms - 10_000,
+                last_in_unix_ms: now_ms - 20,
+                last_out_unix_ms: now_ms - 20,
+                last_in_bytes: 0,
+                last_out_bytes: 0,
+                total_in_bytes: 0,
+                total_out_bytes: 0,
             },
         );
 

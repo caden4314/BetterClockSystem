@@ -1,6 +1,6 @@
 import os
 import sys
-from time import sleep
+from time import perf_counter, sleep
 
 import betterclock_time as time
 
@@ -79,11 +79,15 @@ def main() -> int:
 
     ip_info = client.get_device_ip_info()
     conn = client.get_connection_info()
+    prev_total_in: int | None = None
+    prev_total_out: int | None = None
+    prev_rate_at: float | None = None
 
     try:
         while True:
             try:
                 corrected_time = client.get_corrected_time()
+                state = corrected_time.state
             except Exception as exc:
                 clear()
                 print(f"Connection lost ({type(exc).__name__}: {exc})")
@@ -94,6 +98,9 @@ def main() -> int:
                     try:
                         client, connection_type, report = connect_with_fallback()
                         conn = client.get_connection_info()
+                        prev_total_in = None
+                        prev_total_out = None
+                        prev_rate_at = None
                         recovered = True
                         print("Reconnected.")
                         sleep(0.25)
@@ -105,6 +112,25 @@ def main() -> int:
                     print("Unable to reconnect. Retrying in 2s...")
                     sleep(2.0)
                 continue
+
+            now_perf = perf_counter()
+            if (
+                prev_total_in is None
+                or prev_total_out is None
+                or prev_rate_at is None
+                or now_perf <= prev_rate_at
+            ):
+                live_in_bps = 0.0
+                live_out_bps = 0.0
+            else:
+                elapsed = now_perf - prev_rate_at
+                delta_in = max(0, state.total_in_bytes - prev_total_in)
+                delta_out = max(0, state.total_out_bytes - prev_total_out)
+                live_in_bps = delta_in / elapsed
+                live_out_bps = delta_out / elapsed
+            prev_total_in = state.total_in_bytes
+            prev_total_out = state.total_out_bytes
+            prev_rate_at = now_perf
 
             clear()
             print(
@@ -120,6 +146,16 @@ def main() -> int:
             print(f"RTT: {corrected_time.rtt_ms:.2f} ms")
             print(f"Desync: {corrected_time.desync_ms:.2f} ms")
             print("_________________________________")
+            print("Live IN/s:", f"{time.format_bytes_auto(live_in_bps)}/s")
+            print("Live OUT/s:", f"{time.format_bytes_auto(live_out_bps)}/s")
+            print("Session IN/s:", f"{time.format_bytes_auto(state.session_in_bytes_per_sec)}/s")
+            print("Session OUT/s:", f"{time.format_bytes_auto(state.session_out_bytes_per_sec)}/s")
+            print("Session Last IN:", time.format_unix_ms_local(state.session_last_in_unix_ms))
+            print("Session Last OUT:", time.format_unix_ms_local(state.session_last_out_unix_ms))
+            print("Total IN:", time.format_bytes_auto(state.total_in_bytes))
+            print("Total OUT:", time.format_bytes_auto(state.total_out_bytes))
+            print("Total Requests:", state.total_requests)
+            print("________________________________")
             print(time.format_scan_report(report))
             sleep(FRAME_SLEEP_SECONDS)
     except KeyboardInterrupt:
@@ -136,4 +172,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

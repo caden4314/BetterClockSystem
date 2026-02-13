@@ -49,6 +49,27 @@ DISCOVERY_CACHE_DIR = ".betterclock_time"
 DISCOVERY_CACHE_FILE = "discovery_cache.json"
 
 
+def format_bytes_auto(value: float | int) -> str:
+    size = float(value)
+    if size < 0:
+        size = 0.0
+    units = ("B", "KB", "MB", "GB", "TB", "PB")
+    unit_index = 0
+    while size >= 1024.0 and unit_index < len(units) - 1:
+        size /= 1024.0
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(size)} {units[unit_index]}"
+    return f"{size:.2f} {units[unit_index]}"
+
+
+def format_unix_ms_local(unix_ms: int) -> str:
+    if not unix_ms:
+        return "--"
+    dt = datetime.fromtimestamp(unix_ms / 1000.0)
+    return dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
 def _to_int(value: object, default: int = 0) -> int:
     try:
         return int(value)
@@ -1128,6 +1149,20 @@ class BetterClockTimeClient:
             runtime=runtime,
             clients_seen=_to_int(payload.get("clients_seen", 0)),
             total_requests=_to_int(payload.get("total_requests", 0)),
+            total_in_bytes=_to_int(payload.get("total_in_bytes", 0)),
+            total_out_bytes=_to_int(payload.get("total_out_bytes", 0)),
+            session_in_bytes_per_sec=_to_float_or_none(
+                payload.get("session_in_bytes_per_sec")
+            )
+            or 0.0,
+            session_out_bytes_per_sec=_to_float_or_none(
+                payload.get("session_out_bytes_per_sec")
+            )
+            or 0.0,
+            server_started_unix_ms=_to_int(payload.get("server_started_unix_ms", 0)),
+            session_first_in_unix_ms=_to_int(payload.get("session_first_in_unix_ms", 0)),
+            session_last_in_unix_ms=_to_int(payload.get("session_last_in_unix_ms", 0)),
+            session_last_out_unix_ms=_to_int(payload.get("session_last_out_unix_ms", 0)),
             client_debug_mode=bool(payload.get("client_debug_mode", False)),
             request_received_unix_ms=_to_int(payload.get("request_received_unix_ms", 0)),
             response_unix_ms=_to_int(payload.get("response_unix_ms", 0)),
@@ -1282,6 +1317,15 @@ class BetterClockTimeClient:
                 last_rtt_ms=_to_float_or_none(item.get("last_rtt_ms")),
                 last_offset_ms=_to_float_or_none(item.get("last_offset_ms")),
                 last_desync_ms=_to_float_or_none(item.get("last_desync_ms")),
+                first_in_unix_ms=_to_int(item.get("first_in_unix_ms", 0)),
+                last_in_unix_ms=_to_int(item.get("last_in_unix_ms", 0)),
+                last_out_unix_ms=_to_int(item.get("last_out_unix_ms", 0)),
+                last_in_bytes=_to_int(item.get("last_in_bytes", 0)),
+                last_out_bytes=_to_int(item.get("last_out_bytes", 0)),
+                total_in_bytes=_to_int(item.get("total_in_bytes", 0)),
+                total_out_bytes=_to_int(item.get("total_out_bytes", 0)),
+                in_bytes_per_sec=_to_float_or_none(item.get("in_bytes_per_sec")) or 0.0,
+                out_bytes_per_sec=_to_float_or_none(item.get("out_bytes_per_sec")) or 0.0,
             )
             for item in clients_raw
         ]

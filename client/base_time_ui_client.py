@@ -91,6 +91,14 @@ class SimpleTimeNetworkClient:
         self.latency_samples: deque[tuple[float, float]] = deque(
             maxlen=LATENCY_SAMPLE_WINDOW
         )
+        self.session_start_unix_ms = int(time.time() * 1000)
+        self.last_in_unix_ms = 0
+        self.last_out_unix_ms = 0
+        self.last_request_bytes = 0
+        self.last_response_bytes = 0
+        self.total_out_bytes = 0
+        self.total_in_bytes = 0
+        self.poll_count = 0
 
     def poll(self) -> TimeNetworkSnapshot:
         payload, raw_rtt_ms, send_ms, recv_ms = self._fetch_state_once()
@@ -151,12 +159,22 @@ class SimpleTimeNetworkClient:
             headers["X-Client-Desync-Ms"] = f"{self.offset_desync_ms:.3f}"
 
         request = urllib.request.Request(url, headers=headers, method="GET")
+        request_bytes = _estimate_http_request_bytes(url, headers)
         send_ms = int(time.time() * 1000)
+        self.last_request_bytes = request_bytes
+        self.total_out_bytes += request_bytes
+        self.last_out_unix_ms = send_ms
         start = time.perf_counter()
         with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+            raw = response.read()
+            payload = json.loads(raw.decode("utf-8"))
         end = time.perf_counter()
         recv_ms = int(time.time() * 1000)
+        response_bytes = len(raw)
+        self.last_response_bytes = response_bytes
+        self.total_in_bytes += response_bytes
+        self.last_in_unix_ms = recv_ms
+        self.poll_count += 1
         raw_rtt_ms = (end - start) * 1000.0
         return payload, raw_rtt_ms, send_ms, recv_ms
 
@@ -217,6 +235,17 @@ def _parse_server_timestamps_ms(payload: dict) -> tuple[float | None, float | No
     if response_send_ms is None:
         response_send_ms = parse_numeric(runtime.get("updated_unix_ms"))
     return request_received_ms, response_send_ms
+
+
+def _estimate_http_request_bytes(url: str, headers: dict[str, str]) -> int:
+    parsed = urllib.parse.urlsplit(url)
+    path_query = parsed.path or "/"
+    if parsed.query:
+        path_query = f"{path_query}?{parsed.query}"
+    request_line = f"GET {path_query} HTTP/1.1\r\n"
+    host_line = f"Host: {parsed.netloc}\r\n" if parsed.netloc else ""
+    header_lines = "".join(f"{key}: {value}\r\n" for key, value in headers.items())
+    return len((request_line + host_line + header_lines + "\r\n").encode("utf-8"))
 
 
 def _compute_network_sample(

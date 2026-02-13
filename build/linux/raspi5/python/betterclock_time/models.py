@@ -25,6 +25,14 @@ class StateResponse:
     runtime: RuntimeSnapshot
     clients_seen: int
     total_requests: int
+    total_in_bytes: int
+    total_out_bytes: int
+    session_in_bytes_per_sec: float
+    session_out_bytes_per_sec: float
+    server_started_unix_ms: int
+    session_first_in_unix_ms: int
+    session_last_in_unix_ms: int
+    session_last_out_unix_ms: int
     client_debug_mode: bool
     request_received_unix_ms: int
     response_unix_ms: int
@@ -45,6 +53,15 @@ class PublicClient:
     last_rtt_ms: float | None
     last_offset_ms: float | None
     last_desync_ms: float | None
+    first_in_unix_ms: int
+    last_in_unix_ms: int
+    last_out_unix_ms: int
+    last_in_bytes: int
+    last_out_bytes: int
+    total_in_bytes: int
+    total_out_bytes: int
+    in_bytes_per_sec: float
+    out_bytes_per_sec: float
 
 
 @dataclass

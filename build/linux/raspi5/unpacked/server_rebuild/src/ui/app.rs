@@ -89,6 +89,15 @@ struct AlarmRow {
     kind_text: &'static str,
 }
 
+struct ConnectedClientsSnapshot {
+    clients: Vec<PublicClient>,
+    total_requests: u64,
+    total_in_bytes: u64,
+    total_out_bytes: u64,
+    session_in_bytes_per_sec: f64,
+    session_out_bytes_per_sec: f64,
+}
+
 struct BetterClockApp {
     selected_provider: SelectedTimeProvider,
     scheduler: AlarmScheduler,
@@ -672,21 +681,39 @@ impl BetterClockApp {
         }
     }
 
-    fn connected_clients_snapshot(&self) -> (Vec<PublicClient>, u64) {
+    fn connected_clients_snapshot(&self) -> ConnectedClientsSnapshot {
         let Some(shared) = &self.api_state else {
-            return (vec![], 0);
+            return ConnectedClientsSnapshot {
+                clients: vec![],
+                total_requests: 0,
+                total_in_bytes: 0,
+                total_out_bytes: 0,
+                session_in_bytes_per_sec: 0.0,
+                session_out_bytes_per_sec: 0.0,
+            };
         };
         let guard = match shared.lock() {
             Ok(guard) => guard,
-            Err(_) => return (vec![], 0),
+            Err(_) => {
+                return ConnectedClientsSnapshot {
+                    clients: vec![],
+                    total_requests: 0,
+                    total_in_bytes: 0,
+                    total_out_bytes: 0,
+                    session_in_bytes_per_sec: 0.0,
+                    session_out_bytes_per_sec: 0.0,
+                };
+            }
         };
-        (
-            guard.connected_clients(
-                self.latest_now_local.timestamp_millis(),
-                DEFAULT_CONNECTED_CLIENT_TTL_MS,
-            ),
-            guard.total_requests(),
-        )
+        let now_ms = self.latest_now_local.timestamp_millis();
+        ConnectedClientsSnapshot {
+            clients: guard.connected_clients(now_ms, DEFAULT_CONNECTED_CLIENT_TTL_MS),
+            total_requests: guard.total_requests(),
+            total_in_bytes: guard.total_in_bytes(),
+            total_out_bytes: guard.total_out_bytes(),
+            session_in_bytes_per_sec: guard.session_in_bytes_per_sec(now_ms),
+            session_out_bytes_per_sec: guard.session_out_bytes_per_sec(now_ms),
+        }
     }
 
     fn read_debug_ui_enabled(&self) -> bool {
@@ -727,7 +754,9 @@ impl BetterClockApp {
     }
 
     fn show_connected_clients_panel(&mut self, ui: &mut Ui) {
-        let (clients, total_requests) = self.connected_clients_snapshot();
+        let snapshot = self.connected_clients_snapshot();
+        let clients = snapshot.clients;
+        let total_requests = snapshot.total_requests;
 
         ui.heading(
             RichText::new("Connected Clients")
@@ -792,6 +821,17 @@ impl BetterClockApp {
             .monospace()
             .color(Color32::from_rgb(180, 190, 204)),
         );
+        ui.label(
+            RichText::new(format!(
+                "Total IN: {}   Total OUT: {}   Session IN/s: {}   Session OUT/s: {}",
+                format_bytes_auto(snapshot.total_in_bytes as f64),
+                format_bytes_auto(snapshot.total_out_bytes as f64),
+                format_bytes_per_sec(snapshot.session_in_bytes_per_sec),
+                format_bytes_per_sec(snapshot.session_out_bytes_per_sec),
+            ))
+            .monospace()
+            .color(Color32::from_rgb(157, 205, 192)),
+        );
         ui.add_space(4.0);
 
         ScrollArea::vertical()
@@ -799,7 +839,7 @@ impl BetterClockApp {
             .show(ui, |ui| {
                 egui::Grid::new("clients_grid")
                     .striped(true)
-                    .num_columns(11)
+                    .num_columns(13)
                     .show(ui, |ui| {
                         ui.label(RichText::new("Client ID").strong());
                         ui.label(RichText::new("Instance").strong());
@@ -809,6 +849,8 @@ impl BetterClockApp {
                         ui.label(RichText::new("Offset (ms)").strong());
                         ui.label(RichText::new("Desync (ms)").strong());
                         ui.label(RichText::new("Req/s").strong());
+                        ui.label(RichText::new("IN/s").strong());
+                        ui.label(RichText::new("OUT/s").strong());
                         ui.label(RichText::new("Conn Time").strong());
                         ui.label(RichText::new("Last Seen").strong());
                         ui.label(RichText::new("Requests").strong());
@@ -823,6 +865,8 @@ impl BetterClockApp {
                             let connection_secs = (connection_ms as f64 / 1000.0).max(0.1);
                             let req_per_sec = client.request_count as f64 / connection_secs;
                             let req_per_sec_text = format!("{req_per_sec:06.1}");
+                            let in_rate_text = format_bytes_per_sec(client.in_bytes_per_sec);
+                            let out_rate_text = format_bytes_per_sec(client.out_bytes_per_sec);
                             let ping_text = client
                                 .last_rtt_ms
                                 .map(|value| format!("{value:07.1}"))
@@ -887,6 +931,8 @@ impl BetterClockApp {
                             ui.colored_label(offset_color, RichText::new(offset_text).monospace());
                             ui.colored_label(desync_color, RichText::new(desync_text).monospace());
                             ui.label(RichText::new(req_per_sec_text).monospace());
+                            ui.label(RichText::new(in_rate_text).monospace());
+                            ui.label(RichText::new(out_rate_text).monospace());
                             ui.label(RichText::new(connection_text).monospace());
                             ui.label(RichText::new(last_seen_text).monospace());
                             ui.label(
@@ -1435,6 +1481,25 @@ fn format_duration_hms(duration_ms: i64) -> String {
     let minutes = (total_secs % 3600) / 60;
     let seconds = total_secs % 60;
     format!("{hours:03}:{minutes:02}:{seconds:02}")
+}
+
+fn format_bytes_auto(bytes: f64) -> String {
+    let mut size = if bytes.is_finite() { bytes.max(0.0) } else { 0.0 };
+    let units = ["B", "KB", "MB", "GB", "TB", "PB"];
+    let mut unit_index = 0usize;
+    while size >= 1024.0 && unit_index < units.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+    if unit_index == 0 {
+        format!("{size:.0} {}", units[unit_index])
+    } else {
+        format!("{size:.2} {}", units[unit_index])
+    }
+}
+
+fn format_bytes_per_sec(bytes_per_sec: f64) -> String {
+    format!("{}/s", format_bytes_auto(bytes_per_sec))
 }
 
 fn parse_duration_token(token: &str) -> Result<chrono::Duration> {

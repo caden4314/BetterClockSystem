@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from collections import deque
+import ctypes
 import hashlib
 import json
 import math
@@ -9,6 +10,7 @@ import socket
 import sys
 import time
 import tkinter as tk
+from tkinter import font as tkfont
 import urllib.parse
 import urllib.request
 import uuid
@@ -19,7 +21,7 @@ NORMAL_BG = "#061226"
 NORMAL_PANEL = "#0a1a33"
 WARNING_BG_SOFT = "#4a2a08"
 WARNING_BG_PULSE = "#8d3e00"
-DISCONNECTED_BG = "#351a1"
+DISCONNECTED_BG = "#351a1a"
 TEXT_MAIN = "#dce6f2"
 TEXT_ACCENT = "#6ee0d2"
 TEXT_WARN = "#ffbe73"
@@ -35,6 +37,10 @@ OFFSET_DESYNC_GAIN_SLOW = 0.16
 MAX_REASONABLE_RTT_MS = 60_000.0
 MAX_REASONABLE_OFFSET_MS = 60_000.0
 DEFAULT_RUNTIME_UPDATE_CHECK_MS = 4_000
+DSEG_FONT_PATH = r"G:\BetterClock\ui\fonts\fonts-DSEG_v046\DSEG14-Classic-MINI\DSEG14ClassicMini-Regular.ttf"
+TIME_FONT_FALLBACK = "Consolas"
+DATE_FONT_FALLBACK = "Segoe UI"
+NETWORK_LABEL_FONT = "Consolas"
 
 
 class BetterClockClient:
@@ -95,6 +101,13 @@ class BetterClockClient:
         self.last_runtime_update_check_mono = time.perf_counter()
         self.runtime_update_in_progress = False
         self.runtime_update_status = ""
+        self.started_unix_ms = int(time.time() * 1000)
+        self.last_error_text = ""
+        self.time_font_family, self.font_status_text = configure_time_display_font(
+            root,
+            DSEG_FONT_PATH,
+            fallback_family=TIME_FONT_FALLBACK,
+        )
 
         root.title("BetterClock Production Client")
         root.geometry("1280x720")
@@ -166,7 +179,7 @@ class BetterClockClient:
         self.time_label = tk.Label(
             self.clock_stage,
             text="12:00:00 AM",
-            font=("Consolas", 124, "bold"),
+            font=(self.time_font_family, 124, "bold"),
             bg=NORMAL_BG,
             fg=TEXT_MAIN,
             anchor="center",
@@ -176,7 +189,7 @@ class BetterClockClient:
         self.date_label = tk.Label(
             self.clock_stage,
             text="Monday, January 01 2001",
-            font=("Segoe UI", 32, "bold"),
+            font=(DATE_FONT_FALLBACK, 32, "bold"),
             bg=NORMAL_BG,
             fg="#b9cde4",
             anchor="center",
@@ -192,6 +205,24 @@ class BetterClockClient:
             anchor="center",
         )
         self.subline_label.pack(fill="x", padx=12, pady=(0, 30))
+
+        self.network_panel = tk.Frame(
+            self.container, bg=NORMAL_PANEL, bd=0, highlightthickness=1
+        )
+        self.network_panel.pack(fill="x", pady=(0, 12))
+        self.network_panel.configure(
+            highlightbackground="#1f3a5b", highlightcolor="#1f3a5b"
+        )
+        self.network_stats_label = tk.Label(
+            self.network_panel,
+            text="Network stats loading...",
+            font=(NETWORK_LABEL_FONT, 13, "bold"),
+            bg=NORMAL_PANEL,
+            fg="#a7c2de",
+            anchor="w",
+            justify="left",
+        )
+        self.network_stats_label.pack(fill="x", padx=10, pady=8)
 
         self.status_banner = tk.Frame(
             self.container, bg=NORMAL_PANEL, bd=0, highlightthickness=1
@@ -370,6 +401,13 @@ class BetterClockClient:
         )
         self.status_label.config(text="RUNTIME UPDATING", fg="#bfe3ff")
         self.detail_label.config(text=message)
+        self.network_stats_label.config(
+            text=(
+                f"Server: {self.server_url}    Poll: {self.poll_ms:04d} ms    "
+                f"Client: {self.client_id} / {self.client_instance}\n"
+                f"Clock Font: {self.time_font_family}    Font Source: {self.font_status_text}"
+            )
+        )
         self.set_debug_panel_visible(self.client_debug_mode)
         if self.client_debug_mode:
             self.debug_label.config(
@@ -449,6 +487,10 @@ class BetterClockClient:
         triggered = int(runtime.get("triggered_count", 0))
         armed = int(runtime.get("armed_count", 0))
         clients_seen = int(payload.get("clients_seen", 0))
+        total_requests = int(payload.get("total_requests", 0))
+        server_processing_ms = int(payload.get("server_processing_ms", 0))
+        request_received_unix_ms = int(payload.get("request_received_unix_ms", 0))
+        response_send_unix_ms = int(payload.get("response_send_unix_ms", 0))
 
         self.mode_badge.config(
             text="DEBUG" if self.client_debug_mode else "PRODUCTION",
@@ -505,6 +547,17 @@ class BetterClockClient:
                 f"{detail_text}  |  Warning lead {int(runtime.get('warning_lead_time_ms', 0)):06d} ms"
             )
         )
+        self.network_stats_label.config(
+            text=self.format_network_stats_text(
+                payload=payload,
+                runtime=runtime,
+                server_processing_ms=server_processing_ms,
+                total_requests=total_requests,
+                clients_seen=clients_seen,
+                request_received_unix_ms=request_received_unix_ms,
+                response_send_unix_ms=response_send_unix_ms,
+            )
+        )
         self.set_debug_panel_visible(self.client_debug_mode)
         if self.client_debug_mode:
             self.debug_label.config(
@@ -522,6 +575,7 @@ class BetterClockClient:
         self.apply_background(bg)
 
     def render_disconnected(self, error_text: str) -> None:
+        self.last_error_text = error_text
         self.connection_badge.config(text="DISCONNECTED", bg="#622a2a", fg="#ffd0d0")
         self.warning_badge.config(text="OFFLINE", bg="#4f2b2f", fg="#ffd0d0")
         self.mode_badge.config(
@@ -545,12 +599,51 @@ class BetterClockClient:
                 "Check server status and local network link."
             )
         )
+        self.network_stats_label.config(
+            text=(
+                f"Server: {self.server_url}    Poll: {self.poll_ms:04d} ms    "
+                f"Client: {self.client_id} / {self.client_instance}\n"
+                f"RTT: --.-- ms    Offset: --.-- ms    Desync: --.-- ms    "
+                f"Uptime: {format_duration_hms(max(0, (int(time.time() * 1000) - self.started_unix_ms) // 1000))}\n"
+                f"Clock Font: {self.time_font_family}    Font Source: {self.font_status_text}    "
+                f"Last error: {shorten_text(error_text, 120)}"
+            )
+        )
         if self.client_debug_mode:
             self.set_debug_panel_visible(True)
             self.debug_label.config(text=f"Last error: {error_text}")
         else:
             self.set_debug_panel_visible(False)
         self.apply_background(DISCONNECTED_BG)
+
+    def format_network_stats_text(
+        self,
+        payload: dict,
+        runtime: dict,
+        server_processing_ms: int,
+        total_requests: int,
+        clients_seen: int,
+        request_received_unix_ms: int,
+        response_send_unix_ms: int,
+    ) -> str:
+        del payload  # payload reserved for future expansion in this screen.
+        poll_hz = 1000.0 / float(self.poll_ms) if self.poll_ms > 0 else 0.0
+        uptime_seconds = max(0, (int(time.time() * 1000) - self.started_unix_ms) // 1000)
+        updated_unix_ms = int(runtime.get("updated_unix_ms", 0))
+        warning_active = int(runtime.get("warning_active_count", 0))
+        warning_pulse = 1 if bool(runtime.get("warning_pulse_on", False)) else 0
+        return (
+            f"Server: {self.server_url}    Poll: {self.poll_ms:04d} ms ({poll_hz:05.2f} Hz)    "
+            f"Client: {self.client_id} / {self.client_instance}\n"
+            f"RTT: {self.rtt_ewma_ms:07.2f} ms    Offset: {self.offset_display_ms:+08.2f} ms    "
+            f"Desync: {self.offset_desync_ms:+08.2f} ms    Server Proc: {server_processing_ms:04d} ms\n"
+            f"Req Total: {total_requests:09d}    Clients Seen: {clients_seen:03d}    "
+            f"Warning Active: {warning_active:03d} (Pulse={warning_pulse})    "
+            f"Uptime: {format_duration_hms(uptime_seconds)}\n"
+            f"Srv RX: {request_received_unix_ms:013d}    Srv TX: {response_send_unix_ms:013d}    "
+            f"Runtime Update: {updated_unix_ms:013d}    "
+            f"Clock Font: {self.time_font_family} ({self.font_status_text})"
+        )
 
     def set_debug_panel_visible(self, visible: bool) -> None:
         if visible and not self.debug_panel_visible:
@@ -570,6 +663,12 @@ class BetterClockClient:
         self.time_label.configure(bg=bg)
         self.date_label.configure(bg=bg)
         self.subline_label.configure(bg=bg)
+        self.network_panel.configure(bg=panel_bg)
+        self.network_panel.configure(
+            highlightbackground="#1f3a5b" if self.connected else "#8e4c5b",
+            highlightcolor="#1f3a5b" if self.connected else "#8e4c5b",
+        )
+        self.network_stats_label.configure(bg=panel_bg)
         self.footer_label.configure(bg=bg)
         self.status_label.configure(bg=self.status_banner.cget("bg"))
         self.detail_label.configure(bg=self.status_banner.cget("bg"))
@@ -622,6 +721,96 @@ def os_getpid() -> int:
         return os.getpid()
     except Exception:
         return 0
+
+
+def configure_time_display_font(
+    root: tk.Tk,
+    preferred_font_path: str,
+    fallback_family: str = TIME_FONT_FALLBACK,
+) -> tuple[str, str]:
+    path = preferred_font_path.strip()
+    if not path:
+        return fallback_family, "fallback:no-path"
+    if not os.path.isfile(path):
+        return fallback_family, f"fallback:missing({path})"
+
+    loaded = register_windows_font_private(path)
+    family = detect_dseg_family(root)
+    if family:
+        source = "dseg-loaded" if loaded else "dseg-detected"
+        return family, source
+    return fallback_family, "fallback:family-not-found"
+
+
+def register_windows_font_private(font_path: str) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        FR_PRIVATE = 0x10
+        added = ctypes.windll.gdi32.AddFontResourceExW(font_path, FR_PRIVATE, 0)
+        if added > 0:
+            broadcast_font_change()
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def broadcast_font_change() -> None:
+    if os.name != "nt":
+        return
+    try:
+        HWND_BROADCAST = 0xFFFF
+        WM_FONTCHANGE = 0x001D
+        SMTO_ABORTIFHUNG = 0x0002
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_FONTCHANGE, 0, 0, SMTO_ABORTIFHUNG, 80, 0
+        )
+    except Exception:
+        return
+
+
+def detect_dseg_family(root: tk.Tk) -> str | None:
+    try:
+        families = [str(name) for name in tkfont.families(root)]
+    except Exception:
+        return None
+
+    preferred = [
+        "DSEG14 Classic Mini",
+        "DSEG14 Classic MINI",
+        "DSEG14 Classic",
+        "DSEG14",
+    ]
+    for target in preferred:
+        for family in families:
+            if family.lower() == target.lower():
+                return family
+
+    for family in families:
+        lowered = family.lower()
+        if "dseg14" in lowered and "mini" in lowered:
+            return family
+    for family in families:
+        lowered = family.lower()
+        if "dseg14" in lowered or "dseg" in lowered:
+            return family
+    return None
+
+
+def format_duration_hms(total_seconds: int) -> str:
+    seconds = max(0, int(total_seconds))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{hours:03d}:{minutes:02d}:{secs:02d}"
+
+
+def shorten_text(value: str, max_len: int) -> str:
+    raw = str(value)
+    if len(raw) <= max_len:
+        return raw
+    return f"{raw[: max(0, max_len - 3)]}..."
 
 
 def fetch_state_once(
