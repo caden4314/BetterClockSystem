@@ -12,6 +12,7 @@ import time
 import tkinter as tk
 from tkinter import font as tkfont
 import urllib.parse
+import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime
@@ -37,6 +38,8 @@ OFFSET_DESYNC_GAIN_SLOW = 0.16
 MAX_REASONABLE_RTT_MS = 60_000.0
 MAX_REASONABLE_OFFSET_MS = 60_000.0
 DEFAULT_RUNTIME_UPDATE_CHECK_MS = 4_000
+NETWORK_FAILURE_GRACE_COUNT = 3
+NETWORK_RETRY_BACKOFF_BASE_SECONDS = 0.05
 DSEG_FONT_PATH = r"G:\BetterClock\ui\fonts\fonts-DSEG_v046\DSEG14-Classic-MINI\DSEG14ClassicMini-Regular.ttf"
 TIME_FONT_FALLBACK = "Consolas"
 DATE_FONT_FALLBACK = "Segoe UI"
@@ -103,6 +106,11 @@ class BetterClockClient:
         self.runtime_update_status = ""
         self.started_unix_ms = int(time.time() * 1000)
         self.last_error_text = ""
+        self.consecutive_failures = 0
+        self.last_good_payload: dict | None = None
+        self.last_good_rtt_ms = 0.0
+        self.last_good_recv_ms = 0
+        self.client_seq = 0
         self.time_font_family, self.font_status_text = configure_time_display_font(
             root,
             DSEG_FONT_PATH,
@@ -291,12 +299,28 @@ class BetterClockClient:
         try:
             payload, rtt_ms, client_send_ms, client_recv_ms = self.fetch_state()
             self.connected = True
+            self.consecutive_failures = 0
+            self.last_good_payload = payload
+            self.last_good_rtt_ms = rtt_ms
+            self.last_good_recv_ms = client_recv_ms
             self.update_latency_model(payload, rtt_ms, client_send_ms, client_recv_ms)
             self.render_from_payload(payload, rtt_ms)
             self.maybe_check_runtime_update()
         except Exception as exc:
-            self.connected = False
-            self.render_disconnected(str(exc))
+            self.consecutive_failures += 1
+            if (
+                self.last_good_payload is not None
+                and self.consecutive_failures < NETWORK_FAILURE_GRACE_COUNT
+            ):
+                self.connected = True
+                self.render_from_payload(self.last_good_payload, self.last_good_rtt_ms)
+                self.render_transient_network_error(
+                    self.consecutive_failures,
+                    str(exc),
+                )
+            else:
+                self.connected = False
+                self.render_disconnected(str(exc))
         finally:
             if not self.runtime_update_in_progress:
                 self.schedule_poll()
@@ -305,14 +329,18 @@ class BetterClockClient:
         reported_rtt_ms = self.rtt_ewma_ms if self.offset_initialized else None
         reported_offset_ms = self.offset_display_ms if self.offset_initialized else None
         reported_desync_ms = self.offset_desync_ms if self.offset_initialized else None
+        self.client_seq += 1
+        if self.client_seq > 9_223_372_036_854_775_807:
+            self.client_seq = 1
         return fetch_state_once(
             self.server_url,
             self.client_id,
             self.client_instance,
-            timeout_seconds=1.0,
+            timeout_seconds=1.2,
             reported_rtt_ms=reported_rtt_ms,
             reported_offset_ms=reported_offset_ms,
             reported_desync_ms=reported_desync_ms,
+            client_seq=self.client_seq,
         )
 
     def maybe_check_runtime_update(self) -> None:
@@ -574,6 +602,31 @@ class BetterClockClient:
             )
         self.apply_background(bg)
 
+    def render_transient_network_error(self, failure_count: int, error_text: str) -> None:
+        retry_limit = max(1, NETWORK_FAILURE_GRACE_COUNT - 1)
+        self.last_error_text = error_text
+        self.connection_badge.config(
+            text=f"RETRY {failure_count:02d}/{retry_limit:02d}",
+            bg="#5a3c16",
+            fg="#ffd8a8",
+        )
+        network_text = str(self.network_stats_label.cget("text"))
+        self.network_stats_label.config(
+            text=(
+                f"{network_text}\n"
+                f"Transient network jitter ({failure_count}/{retry_limit}): "
+                f"{shorten_text(error_text, 100)}"
+            )
+        )
+        if self.client_debug_mode:
+            current_debug = str(self.debug_label.cget("text"))
+            self.debug_label.config(
+                text=(
+                    f"{current_debug}\n"
+                    f"Transient error ({failure_count}/{retry_limit}): {shorten_text(error_text, 120)}"
+                )
+            )
+
     def render_disconnected(self, error_text: str) -> None:
         self.last_error_text = error_text
         self.connection_badge.config(text="DISCONNECTED", bg="#622a2a", fg="#ffd0d0")
@@ -821,6 +874,7 @@ def fetch_state_once(
     reported_rtt_ms: float | None = None,
     reported_offset_ms: float | None = None,
     reported_desync_ms: float | None = None,
+    client_seq: int | None = None,
 ) -> tuple[dict, float, int, int]:
     separator = "&" if "?" in server_url else "?"
     url = (
@@ -838,20 +892,40 @@ def fetch_state_once(
         headers["X-Client-Offset-Ms"] = f"{reported_offset_ms:.3f}"
     if reported_desync_ms is not None:
         headers["X-Client-Desync-Ms"] = f"{reported_desync_ms:.3f}"
+    if client_seq is not None:
+        headers["X-Client-Seq"] = str(max(0, int(client_seq)))
     req = urllib.request.Request(
         url,
         headers=headers,
         method="GET",
     )
-    send_ms = int(time.time() * 1000)
-    start = time.perf_counter()
-    with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
-        raw = response.read().decode("utf-8")
-        payload = json.loads(raw)
-    end = time.perf_counter()
-    recv_ms = int(time.time() * 1000)
-    rtt_ms = (end - start) * 1000.0
-    return payload, rtt_ms, send_ms, recv_ms
+    timeout_attempts = (
+        max(0.1, timeout_seconds),
+        max(timeout_seconds + 0.6, timeout_seconds * 1.7),
+    )
+    last_network_error: Exception | None = None
+    for attempt_index, attempt_timeout in enumerate(timeout_attempts):
+        send_ms = int(time.time() * 1000)
+        start = time.perf_counter()
+        try:
+            with urllib.request.urlopen(req, timeout=attempt_timeout) as response:
+                raw = response.read().decode("utf-8")
+                payload = json.loads(raw)
+            end = time.perf_counter()
+            recv_ms = int(time.time() * 1000)
+            rtt_ms = (end - start) * 1000.0
+            return payload, rtt_ms, send_ms, recv_ms
+        except urllib.error.HTTPError:
+            raise
+        except (TimeoutError, urllib.error.URLError, OSError) as exc:
+            last_network_error = exc
+            if attempt_index + 1 >= len(timeout_attempts):
+                raise
+            time.sleep(NETWORK_RETRY_BACKOFF_BASE_SECONDS * (attempt_index + 1))
+
+    if last_network_error is not None:
+        raise last_network_error
+    raise RuntimeError("state request failed without a captured exception")
 
 
 def parse_server_timestamps_ms(payload: dict) -> tuple[float | None, float | None]:

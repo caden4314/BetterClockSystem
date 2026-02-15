@@ -52,11 +52,13 @@ paths:
         - $ref: "#/components/parameters/rtt_ms_query"
         - $ref: "#/components/parameters/offset_ms_query"
         - $ref: "#/components/parameters/desync_ms_query"
+        - $ref: "#/components/parameters/client_seq_query"
         - $ref: "#/components/parameters/client_id_header"
         - $ref: "#/components/parameters/instance_id_header"
         - $ref: "#/components/parameters/rtt_ms_header"
         - $ref: "#/components/parameters/offset_ms_header"
         - $ref: "#/components/parameters/desync_ms_header"
+        - $ref: "#/components/parameters/client_seq_header"
       responses:
         "200":
           description: Server runtime/state snapshot
@@ -83,11 +85,13 @@ paths:
         - $ref: "#/components/parameters/rtt_ms_query"
         - $ref: "#/components/parameters/offset_ms_query"
         - $ref: "#/components/parameters/desync_ms_query"
+        - $ref: "#/components/parameters/client_seq_query"
         - $ref: "#/components/parameters/client_id_header"
         - $ref: "#/components/parameters/instance_id_header"
         - $ref: "#/components/parameters/rtt_ms_header"
         - $ref: "#/components/parameters/offset_ms_header"
         - $ref: "#/components/parameters/desync_ms_header"
+        - $ref: "#/components/parameters/client_seq_header"
       responses:
         "200":
           description: Server runtime/state snapshot
@@ -114,11 +118,13 @@ paths:
         - $ref: "#/components/parameters/rtt_ms_query"
         - $ref: "#/components/parameters/offset_ms_query"
         - $ref: "#/components/parameters/desync_ms_query"
+        - $ref: "#/components/parameters/client_seq_query"
         - $ref: "#/components/parameters/client_id_header"
         - $ref: "#/components/parameters/instance_id_header"
         - $ref: "#/components/parameters/rtt_ms_header"
         - $ref: "#/components/parameters/offset_ms_header"
         - $ref: "#/components/parameters/desync_ms_header"
+        - $ref: "#/components/parameters/client_seq_header"
       responses:
         "200":
           description: Active clients list (within server TTL window)
@@ -291,6 +297,15 @@ components:
         minimum: -60000
         maximum: 60000
       description: Client desync metric in ms.
+    client_seq_query:
+      name: client_seq
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: uint64
+        minimum: 0
+      description: Monotonic client request sequence for host-side dropped-packet estimation.
     client_id_header:
       name: X-Client-Id
       in: header
@@ -329,6 +344,15 @@ components:
         type: number
         format: double
       description: Header alternative to `desync_ms`.
+    client_seq_header:
+      name: X-Client-Seq
+      in: header
+      required: false
+      schema:
+        type: integer
+        format: uint64
+        minimum: 0
+      description: Header alternative to `client_seq`.
 
   responses:
     BadRequest:
@@ -433,6 +457,8 @@ components:
         - total_out_bytes
         - in_bytes_per_sec
         - out_bytes_per_sec
+        - dropped_packets
+        - dropped_packets_per_sec
       properties:
         id:
           type: string
@@ -492,6 +518,17 @@ components:
           type: number
           format: double
           minimum: 0
+        dropped_packets:
+          type: integer
+          format: uint64
+        dropped_packets_per_sec:
+          type: number
+          format: double
+          minimum: 0
+        last_client_seq:
+          type: integer
+          format: uint64
+          nullable: true
 
     StateResponse:
       type: object
@@ -501,8 +538,10 @@ components:
         - total_requests
         - total_in_bytes
         - total_out_bytes
+        - total_dropped_packets
         - session_in_bytes_per_sec
         - session_out_bytes_per_sec
+        - session_dropped_packets_per_sec
         - server_started_unix_ms
         - session_first_in_unix_ms
         - session_last_in_unix_ms
@@ -528,11 +567,18 @@ components:
         total_out_bytes:
           type: integer
           format: uint64
+        total_dropped_packets:
+          type: integer
+          format: uint64
         session_in_bytes_per_sec:
           type: number
           format: double
           minimum: 0
         session_out_bytes_per_sec:
+          type: number
+          format: double
+          minimum: 0
+        session_dropped_packets_per_sec:
           type: number
           format: double
           minimum: 0

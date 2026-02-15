@@ -1,5 +1,8 @@
 On Raspberry Pi 5:
 1) Install Rust toolchain.
 2) cd server_rebuild
-3) cargo build --release
-4) Binary: target/release/betterclock
+3) Optional sanity check:
+   - uname -m  (expect: aarch64)
+   - getconf LONG_BIT (expect: 64)
+4) cargo build --release
+5) Binary: target/release/betterclock

@@ -94,8 +94,10 @@ struct ConnectedClientsSnapshot {
     total_requests: u64,
     total_in_bytes: u64,
     total_out_bytes: u64,
+    total_dropped_packets: u64,
     session_in_bytes_per_sec: f64,
     session_out_bytes_per_sec: f64,
+    session_dropped_packets_per_sec: f64,
 }
 
 struct BetterClockApp {
@@ -688,8 +690,10 @@ impl BetterClockApp {
                 total_requests: 0,
                 total_in_bytes: 0,
                 total_out_bytes: 0,
+                total_dropped_packets: 0,
                 session_in_bytes_per_sec: 0.0,
                 session_out_bytes_per_sec: 0.0,
+                session_dropped_packets_per_sec: 0.0,
             };
         };
         let guard = match shared.lock() {
@@ -700,8 +704,10 @@ impl BetterClockApp {
                     total_requests: 0,
                     total_in_bytes: 0,
                     total_out_bytes: 0,
+                    total_dropped_packets: 0,
                     session_in_bytes_per_sec: 0.0,
                     session_out_bytes_per_sec: 0.0,
+                    session_dropped_packets_per_sec: 0.0,
                 };
             }
         };
@@ -711,8 +717,10 @@ impl BetterClockApp {
             total_requests: guard.total_requests(),
             total_in_bytes: guard.total_in_bytes(),
             total_out_bytes: guard.total_out_bytes(),
+            total_dropped_packets: guard.total_dropped_packets(),
             session_in_bytes_per_sec: guard.session_in_bytes_per_sec(now_ms),
             session_out_bytes_per_sec: guard.session_out_bytes_per_sec(now_ms),
+            session_dropped_packets_per_sec: guard.session_dropped_packets_per_sec(now_ms),
         }
     }
 
@@ -823,11 +831,13 @@ impl BetterClockApp {
         );
         ui.label(
             RichText::new(format!(
-                "Total IN: {}   Total OUT: {}   Session IN/s: {}   Session OUT/s: {}",
+                "Total IN: {}   Total OUT: {}   Total Dropped: {:08}   Session IN/s: {}   Session OUT/s: {}   Session Drop/s: {}",
                 format_bytes_auto(snapshot.total_in_bytes as f64),
                 format_bytes_auto(snapshot.total_out_bytes as f64),
+                snapshot.total_dropped_packets,
                 format_bytes_per_sec(snapshot.session_in_bytes_per_sec),
                 format_bytes_per_sec(snapshot.session_out_bytes_per_sec),
+                format_packets_per_sec(snapshot.session_dropped_packets_per_sec),
             ))
             .monospace()
             .color(Color32::from_rgb(157, 205, 192)),
@@ -839,7 +849,7 @@ impl BetterClockApp {
             .show(ui, |ui| {
                 egui::Grid::new("clients_grid")
                     .striped(true)
-                    .num_columns(13)
+                    .num_columns(15)
                     .show(ui, |ui| {
                         ui.label(RichText::new("Client ID").strong());
                         ui.label(RichText::new("Instance").strong());
@@ -851,6 +861,8 @@ impl BetterClockApp {
                         ui.label(RichText::new("Req/s").strong());
                         ui.label(RichText::new("IN/s").strong());
                         ui.label(RichText::new("OUT/s").strong());
+                        ui.label(RichText::new("Drop/s").strong());
+                        ui.label(RichText::new("Dropped").strong());
                         ui.label(RichText::new("Conn Time").strong());
                         ui.label(RichText::new("Last Seen").strong());
                         ui.label(RichText::new("Requests").strong());
@@ -867,6 +879,8 @@ impl BetterClockApp {
                             let req_per_sec_text = format!("{req_per_sec:06.1}");
                             let in_rate_text = format_bytes_per_sec(client.in_bytes_per_sec);
                             let out_rate_text = format_bytes_per_sec(client.out_bytes_per_sec);
+                            let drop_rate_text =
+                                format_packets_per_sec(client.dropped_packets_per_sec);
                             let ping_text = client
                                 .last_rtt_ms
                                 .map(|value| format!("{value:07.1}"))
@@ -933,6 +947,10 @@ impl BetterClockApp {
                             ui.label(RichText::new(req_per_sec_text).monospace());
                             ui.label(RichText::new(in_rate_text).monospace());
                             ui.label(RichText::new(out_rate_text).monospace());
+                            ui.label(RichText::new(drop_rate_text).monospace());
+                            ui.label(
+                                RichText::new(format!("{:08}", client.dropped_packets)).monospace(),
+                            );
                             ui.label(RichText::new(connection_text).monospace());
                             ui.label(RichText::new(last_seen_text).monospace());
                             ui.label(
@@ -1500,6 +1518,15 @@ fn format_bytes_auto(bytes: f64) -> String {
 
 fn format_bytes_per_sec(bytes_per_sec: f64) -> String {
     format!("{}/s", format_bytes_auto(bytes_per_sec))
+}
+
+fn format_packets_per_sec(packets_per_sec: f64) -> String {
+    let value = if packets_per_sec.is_finite() {
+        packets_per_sec.max(0.0)
+    } else {
+        0.0
+    };
+    format!("{value:06.2}/s")
 }
 
 fn parse_duration_token(token: &str) -> Result<chrono::Duration> {

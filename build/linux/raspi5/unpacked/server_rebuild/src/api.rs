@@ -57,6 +57,9 @@ pub struct PublicClient {
     pub total_out_bytes: u64,
     pub in_bytes_per_sec: f64,
     pub out_bytes_per_sec: f64,
+    pub dropped_packets: u64,
+    pub dropped_packets_per_sec: f64,
+    pub last_client_seq: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +81,8 @@ struct ClientRecord {
     last_out_bytes: u64,
     total_in_bytes: u64,
     total_out_bytes: u64,
+    dropped_packets: u64,
+    last_client_seq: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -87,6 +92,7 @@ pub struct ApiSharedState {
     total_requests: u64,
     total_in_bytes: u64,
     total_out_bytes: u64,
+    total_dropped_packets: u64,
     server_started_unix_ms: i64,
     session_first_in_unix_ms: i64,
     session_last_in_unix_ms: i64,
@@ -102,6 +108,7 @@ impl Default for ApiSharedState {
             total_requests: 0,
             total_in_bytes: 0,
             total_out_bytes: 0,
+            total_dropped_packets: 0,
             server_started_unix_ms: Local::now().timestamp_millis(),
             session_first_in_unix_ms: 0,
             session_last_in_unix_ms: 0,
@@ -134,6 +141,8 @@ impl ApiSharedState {
                     Self::compute_bytes_per_sec(entry.total_in_bytes, entry.first_seen_unix_ms, now_ms);
                 let out_bytes_per_sec =
                     Self::compute_bytes_per_sec(entry.total_out_bytes, entry.first_seen_unix_ms, now_ms);
+                let dropped_packets_per_sec =
+                    Self::compute_bytes_per_sec(entry.dropped_packets, entry.first_seen_unix_ms, now_ms);
                 PublicClient {
                     id: entry.id,
                     instance_id: entry.instance_id,
@@ -154,6 +163,9 @@ impl ApiSharedState {
                     total_out_bytes: entry.total_out_bytes,
                     in_bytes_per_sec,
                     out_bytes_per_sec,
+                    dropped_packets: entry.dropped_packets,
+                    dropped_packets_per_sec,
+                    last_client_seq: entry.last_client_seq,
                 }
             })
             .collect::<Vec<_>>();
@@ -181,6 +193,10 @@ impl ApiSharedState {
         self.total_out_bytes
     }
 
+    pub fn total_dropped_packets(&self) -> u64 {
+        self.total_dropped_packets
+    }
+
     pub fn server_started_unix_ms(&self) -> i64 {
         self.server_started_unix_ms
     }
@@ -203,6 +219,14 @@ impl ApiSharedState {
 
     pub fn session_out_bytes_per_sec(&self, now_ms: i64) -> f64 {
         Self::compute_bytes_per_sec(self.total_out_bytes, self.session_first_in_unix_ms, now_ms)
+    }
+
+    pub fn session_dropped_packets_per_sec(&self, now_ms: i64) -> f64 {
+        Self::compute_bytes_per_sec(
+            self.total_dropped_packets,
+            self.session_first_in_unix_ms,
+            now_ms,
+        )
     }
 
     pub fn client_debug_mode(&self, client_id: &str, instance_id: &str) -> Option<bool> {
@@ -481,6 +505,7 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
     let client_rtt_ms = extract_client_rtt_ms(query, &request);
     let client_offset_ms = extract_client_offset_ms(query, &request);
     let client_desync_ms = extract_client_desync_ms(query, &request);
+    let client_seq = extract_client_seq(query, &request);
 
     let mut guard = match state.lock() {
         Ok(guard) => guard,
@@ -502,6 +527,7 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
             client_rtt_ms,
             client_offset_ms,
             client_desync_ms,
+            client_seq,
         );
     }
     let requester_debug_mode = if is_disconnect_route {
@@ -558,8 +584,10 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
                 total_requests: u64,
                 total_in_bytes: u64,
                 total_out_bytes: u64,
+                total_dropped_packets: u64,
                 session_in_bytes_per_sec: f64,
                 session_out_bytes_per_sec: f64,
+                session_dropped_packets_per_sec: f64,
                 server_started_unix_ms: i64,
                 session_first_in_unix_ms: i64,
                 session_last_in_unix_ms: i64,
@@ -584,8 +612,11 @@ fn handle_request(request: tiny_http::Request, state: &Arc<Mutex<ApiSharedState>
                 total_requests: guard.total_requests(),
                 total_in_bytes: guard.total_in_bytes(),
                 total_out_bytes: guard.total_out_bytes(),
+                total_dropped_packets: guard.total_dropped_packets(),
                 session_in_bytes_per_sec: guard.session_in_bytes_per_sec(response_send_unix_ms),
                 session_out_bytes_per_sec: guard.session_out_bytes_per_sec(response_send_unix_ms),
+                session_dropped_packets_per_sec: guard
+                    .session_dropped_packets_per_sec(response_send_unix_ms),
                 server_started_unix_ms: guard.server_started_unix_ms(),
                 session_first_in_unix_ms: guard.session_first_in_unix_ms(),
                 session_last_in_unix_ms: guard.session_last_in_unix_ms(),
@@ -771,6 +802,7 @@ fn register_client(
     client_rtt_ms: Option<f64>,
     client_offset_ms: Option<f64>,
     client_desync_ms: Option<f64>,
+    client_seq: Option<u64>,
 ) {
     state.total_requests = state.total_requests.saturating_add(1);
 
@@ -793,6 +825,8 @@ fn register_client(
         last_out_bytes: 0,
         total_in_bytes: 0,
         total_out_bytes: 0,
+        dropped_packets: 0,
+        last_client_seq: None,
     });
     entry.ip = remote_ip.to_string();
     entry.request_count = entry.request_count.saturating_add(1);
@@ -808,6 +842,16 @@ fn register_client(
     }
     if let Some(desync_ms) = client_desync_ms {
         entry.last_desync_ms = Some(desync_ms);
+    }
+    if let Some(seq) = client_seq {
+        if let Some(last_seq) = entry.last_client_seq
+            && seq > last_seq.saturating_add(1)
+        {
+            let dropped = seq.saturating_sub(last_seq.saturating_add(1));
+            entry.dropped_packets = entry.dropped_packets.saturating_add(dropped);
+            state.total_dropped_packets = state.total_dropped_packets.saturating_add(dropped);
+        }
+        entry.last_client_seq = Some(seq);
     }
 }
 
@@ -1036,6 +1080,23 @@ fn extract_client_desync_ms(query: &str, request: &tiny_http::Request) -> Option
     None
 }
 
+fn extract_client_seq(query: &str, request: &tiny_http::Request) -> Option<u64> {
+    if let Some(raw) = query_param(query, "client_seq")
+        && let Some(parsed) = parse_client_seq(raw)
+    {
+        return Some(parsed);
+    }
+
+    for header in request.headers() {
+        if header.field.equiv("X-Client-Seq")
+            && let Some(parsed) = parse_client_seq(header.value.as_str())
+        {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
 fn parse_rtt_ms(input: &str) -> Option<f64> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -1058,6 +1119,14 @@ fn parse_offset_ms(input: &str) -> Option<f64> {
         return None;
     }
     Some(value)
+}
+
+fn parse_client_seq(input: &str) -> Option<u64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<u64>().ok()
 }
 
 fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
@@ -1152,6 +1221,8 @@ mod tests {
                 last_out_bytes: 0,
                 total_in_bytes: 0,
                 total_out_bytes: 0,
+                dropped_packets: 0,
+                last_client_seq: None,
             },
         );
 
@@ -1184,6 +1255,8 @@ mod tests {
                 last_out_bytes: 0,
                 total_in_bytes: 0,
                 total_out_bytes: 0,
+                dropped_packets: 0,
+                last_client_seq: None,
             },
         );
 
@@ -1208,6 +1281,51 @@ mod tests {
         assert_eq!(parse_offset_ms("60001"), None);
         assert_eq!(parse_offset_ms("-70000"), None);
         assert_eq!(parse_offset_ms(""), None);
+    }
+
+    #[test]
+    fn parse_client_seq_accepts_non_negative_u64() {
+        assert_eq!(parse_client_seq("0"), Some(0));
+        assert_eq!(parse_client_seq("42"), Some(42));
+        assert_eq!(parse_client_seq("-1"), None);
+        assert_eq!(parse_client_seq("abc"), None);
+    }
+
+    #[test]
+    fn client_seq_gap_is_counted_as_dropped_packets() {
+        let now_ms = 1_000_000;
+        let mut state = ApiSharedState::default();
+
+        register_client(
+            &mut state,
+            "client-a",
+            "inst-01",
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            now_ms,
+            100,
+            Some(1.0),
+            Some(0.0),
+            Some(0.0),
+            Some(1),
+        );
+        register_client(
+            &mut state,
+            "client-a",
+            "inst-01",
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            now_ms + 10,
+            100,
+            Some(1.0),
+            Some(0.0),
+            Some(0.0),
+            Some(4),
+        );
+
+        assert_eq!(state.total_dropped_packets(), 2);
+        let clients = state.connected_clients(now_ms + 11, 15_000);
+        assert_eq!(clients.len(), 1);
+        assert_eq!(clients[0].dropped_packets, 2);
+        assert_eq!(clients[0].last_client_seq, Some(4));
     }
 
     #[test]
@@ -1249,6 +1367,8 @@ mod tests {
                 last_out_bytes: 0,
                 total_in_bytes: 0,
                 total_out_bytes: 0,
+                dropped_packets: 0,
+                last_client_seq: None,
             },
         );
         state.clients.insert(
@@ -1271,6 +1391,8 @@ mod tests {
                 last_out_bytes: 0,
                 total_in_bytes: 0,
                 total_out_bytes: 0,
+                dropped_packets: 0,
+                last_client_seq: None,
             },
         );
 

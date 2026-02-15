@@ -37,9 +37,19 @@ python test.py
 Current artifacts are organized by platform:
 
 - Windows: `build/windows/server/betterclock.exe`
-- Linux (Raspberry Pi 5 aarch64): `build/linux/raspi5/server/betterclock`
+- Linux (Raspberry Pi 5 aarch64): `build/linux/raspi5/server/betterclock` (best-effort prebuilt)
 
 Bundled Python package/examples are included in both platform folders.
+
+If the prebuilt Linux binary does not run on your Pi image, rebuild natively:
+
+1. `cd build/linux/raspi5/unpacked/server_rebuild`
+2. `cargo build --release`
+3. Use `target/release/betterclock`
+
+Quick platform check on Pi:
+- `uname -m` should be `aarch64`
+- `getconf LONG_BIT` should be `64`
 
 ## API
 

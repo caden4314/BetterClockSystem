@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -56,6 +57,8 @@ class TimeNetworkSnapshot:
     triggered_count: int
     clients_seen: int
     total_requests: int
+    total_dropped_packets: int
+    session_dropped_packets_per_sec: float
     rtt_ms: float
     offset_ms: float
     desync_ms: float
@@ -77,7 +80,7 @@ class SimpleTimeNetworkClient:
         *,
         client_id: str = "simple-time-ui",
         instance_id: str | None = None,
-        timeout_seconds: float = 1.0,
+        timeout_seconds: float = 1.4,
     ) -> None:
         self.state_url = _resolve_state_url(base_url)
         self.timeout_seconds = max(0.1, timeout_seconds)
@@ -99,6 +102,7 @@ class SimpleTimeNetworkClient:
         self.total_out_bytes = 0
         self.total_in_bytes = 0
         self.poll_count = 0
+        self.client_seq = 0
 
     def poll(self) -> TimeNetworkSnapshot:
         payload, raw_rtt_ms, send_ms, recv_ms = self._fetch_state_once()
@@ -133,6 +137,10 @@ class SimpleTimeNetworkClient:
             triggered_count=int(runtime.get("triggered_count", 0)),
             clients_seen=int(payload.get("clients_seen", 0)),
             total_requests=int(payload.get("total_requests", 0)),
+            total_dropped_packets=int(payload.get("total_dropped_packets", 0)),
+            session_dropped_packets_per_sec=float(
+                payload.get("session_dropped_packets_per_sec", 0.0) or 0.0
+            ),
             rtt_ms=self.rtt_ewma_ms,
             offset_ms=self.offset_display_ms,
             desync_ms=self.offset_desync_ms,
@@ -153,30 +161,53 @@ class SimpleTimeNetworkClient:
             "X-Client-Id": self.client_id,
             "X-Client-Instance": self.instance_id,
         }
+        self.client_seq += 1
+        if self.client_seq > 9_223_372_036_854_775_807:
+            self.client_seq = 1
+        headers["X-Client-Seq"] = str(self.client_seq)
         if self.offset_initialized:
             headers["X-Client-Rtt-Ms"] = f"{self.rtt_ewma_ms:.3f}"
             headers["X-Client-Offset-Ms"] = f"{self.offset_display_ms:.3f}"
             headers["X-Client-Desync-Ms"] = f"{self.offset_desync_ms:.3f}"
 
         request = urllib.request.Request(url, headers=headers, method="GET")
+        timeout_attempts = (
+            self.timeout_seconds,
+            max(self.timeout_seconds + 0.75, self.timeout_seconds * 1.8),
+        )
+
         request_bytes = _estimate_http_request_bytes(url, headers)
-        send_ms = int(time.time() * 1000)
-        self.last_request_bytes = request_bytes
-        self.total_out_bytes += request_bytes
-        self.last_out_unix_ms = send_ms
-        start = time.perf_counter()
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-            raw = response.read()
-            payload = json.loads(raw.decode("utf-8"))
-        end = time.perf_counter()
-        recv_ms = int(time.time() * 1000)
-        response_bytes = len(raw)
-        self.last_response_bytes = response_bytes
-        self.total_in_bytes += response_bytes
-        self.last_in_unix_ms = recv_ms
-        self.poll_count += 1
-        raw_rtt_ms = (end - start) * 1000.0
-        return payload, raw_rtt_ms, send_ms, recv_ms
+        last_network_error: Exception | None = None
+        for attempt_index, attempt_timeout in enumerate(timeout_attempts):
+            send_ms = int(time.time() * 1000)
+            self.last_request_bytes = request_bytes
+            self.total_out_bytes += request_bytes
+            self.last_out_unix_ms = send_ms
+            start = time.perf_counter()
+            try:
+                with urllib.request.urlopen(request, timeout=attempt_timeout) as response:
+                    raw = response.read()
+                    payload = json.loads(raw.decode("utf-8"))
+                end = time.perf_counter()
+                recv_ms = int(time.time() * 1000)
+                response_bytes = len(raw)
+                self.last_response_bytes = response_bytes
+                self.total_in_bytes += response_bytes
+                self.last_in_unix_ms = recv_ms
+                self.poll_count += 1
+                raw_rtt_ms = (end - start) * 1000.0
+                return payload, raw_rtt_ms, send_ms, recv_ms
+            except urllib.error.HTTPError:
+                raise
+            except (TimeoutError, urllib.error.URLError, OSError) as exc:
+                last_network_error = exc
+                if attempt_index + 1 >= len(timeout_attempts):
+                    raise
+                time.sleep(0.05 * (attempt_index + 1))
+
+        if last_network_error is not None:
+            raise last_network_error
+        raise RuntimeError("poll failed without a captured exception")
 
     def _update_offset_model(self, corrected_rtt_ms: float, offset_sample_ms: float) -> None:
         self.latency_samples.append((corrected_rtt_ms, offset_sample_ms))

@@ -6,6 +6,7 @@ import math
 import os
 import socket
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -983,6 +984,7 @@ class BetterClockTimeClient:
         self.client_id = selected_name.strip() if selected_name and selected_name.strip() else client_id
         self.instance_id = instance_id or f"py-{uuid.uuid4().hex[:10]}"
         self.disconnected = False
+        self._client_seq = 0
 
         self.offset_initialized = False
         self.offset_display_ms = 0.0
@@ -1094,22 +1096,46 @@ class BetterClockTimeClient:
 
         headers: dict[str, str] = {"Accept": accept}
         if send_client_headers:
+            self._client_seq += 1
+            if self._client_seq > 9_223_372_036_854_775_807:
+                self._client_seq = 1
             headers["X-Client-Id"] = self.client_id
             headers["X-Client-Instance"] = self.instance_id
+            headers["X-Client-Seq"] = str(self._client_seq)
             if self.offset_initialized:
                 headers["X-Client-Rtt-Ms"] = f"{self.rtt_ewma_ms:.3f}"
                 headers["X-Client-Offset-Ms"] = f"{self.offset_display_ms:.3f}"
                 headers["X-Client-Desync-Ms"] = f"{self.offset_desync_ms:.3f}"
 
         request = urllib.request.Request(full_url, headers=headers, method="GET")
-        send_ms = int(time.time() * 1000)
-        start = time.perf_counter()
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-            payload = response.read()
-        end = time.perf_counter()
-        recv_ms = int(time.time() * 1000)
-        rtt_ms = (end - start) * 1000.0
-        return payload, rtt_ms, send_ms, recv_ms
+        timeout_attempts = (
+            self.timeout_seconds,
+            max(self.timeout_seconds + 0.75, self.timeout_seconds * 1.8),
+        )
+        last_network_error: Exception | None = None
+
+        for attempt_index, attempt_timeout in enumerate(timeout_attempts):
+            send_ms = int(time.time() * 1000)
+            start = time.perf_counter()
+            try:
+                with urllib.request.urlopen(request, timeout=attempt_timeout) as response:
+                    payload = response.read()
+                end = time.perf_counter()
+                recv_ms = int(time.time() * 1000)
+                rtt_ms = (end - start) * 1000.0
+                return payload, rtt_ms, send_ms, recv_ms
+            except urllib.error.HTTPError:
+                # Auth/permission/not-found must not be retried as network flaps.
+                raise
+            except (TimeoutError, urllib.error.URLError, OSError) as exc:
+                last_network_error = exc
+                if attempt_index + 1 >= len(timeout_attempts):
+                    raise
+                time.sleep(0.05 * (attempt_index + 1))
+
+        if last_network_error is not None:
+            raise last_network_error
+        raise RuntimeError("request failed without a captured exception")
 
     def set_client_id(self, client_name: str) -> None:
         cleaned = client_name.strip()
@@ -1120,6 +1146,7 @@ class BetterClockTimeClient:
     def reconnect(self, *, new_instance: bool = True) -> None:
         if new_instance:
             self.instance_id = f"py-{uuid.uuid4().hex[:10]}"
+        self._client_seq = 0
         self.disconnected = False
         self.offset_initialized = False
         self.offset_display_ms = 0.0
@@ -1151,12 +1178,17 @@ class BetterClockTimeClient:
             total_requests=_to_int(payload.get("total_requests", 0)),
             total_in_bytes=_to_int(payload.get("total_in_bytes", 0)),
             total_out_bytes=_to_int(payload.get("total_out_bytes", 0)),
+            total_dropped_packets=_to_int(payload.get("total_dropped_packets", 0)),
             session_in_bytes_per_sec=_to_float_or_none(
                 payload.get("session_in_bytes_per_sec")
             )
             or 0.0,
             session_out_bytes_per_sec=_to_float_or_none(
                 payload.get("session_out_bytes_per_sec")
+            )
+            or 0.0,
+            session_dropped_packets_per_sec=_to_float_or_none(
+                payload.get("session_dropped_packets_per_sec")
             )
             or 0.0,
             server_started_unix_ms=_to_int(payload.get("server_started_unix_ms", 0)),
@@ -1326,6 +1358,12 @@ class BetterClockTimeClient:
                 total_out_bytes=_to_int(item.get("total_out_bytes", 0)),
                 in_bytes_per_sec=_to_float_or_none(item.get("in_bytes_per_sec")) or 0.0,
                 out_bytes_per_sec=_to_float_or_none(item.get("out_bytes_per_sec")) or 0.0,
+                dropped_packets=_to_int(item.get("dropped_packets", 0)),
+                dropped_packets_per_sec=_to_float_or_none(item.get("dropped_packets_per_sec"))
+                or 0.0,
+                last_client_seq=_to_int(item.get("last_client_seq"), 0)
+                if item.get("last_client_seq") is not None
+                else None,
             )
             for item in clients_raw
         ]

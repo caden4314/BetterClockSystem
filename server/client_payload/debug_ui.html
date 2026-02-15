@@ -120,6 +120,8 @@
             <th>Offset</th>
             <th>Desync</th>
             <th>Req/s</th>
+            <th>Drop/s</th>
+            <th>Dropped</th>
             <th>Conn</th>
           </tr>
         </thead>
@@ -132,6 +134,8 @@
     const DEBUG_CLIENT_INSTANCE = getDebugClientInstance();
     const STATE_POLL_MS = 350;
     const UI_TICK_MS = 50;
+    const FETCH_TIMEOUT_MS = 1700;
+    const FAILURE_GRACE_COUNT = 3;
     const LATENCY_SAMPLE_WINDOW = 24;
     const LOW_RTT_SAMPLE_FLOOR = 5;
     const LOW_RTT_HEADROOM_MS = 8.0;
@@ -154,6 +158,9 @@
       warningActiveCount: 0,
       warningPulseMs: 250
     };
+    let refreshInFlight = false;
+    let refreshFailureStreak = 0;
+    let clientSeq = 0;
 
     function pad(n, width) {
       const s = String(n);
@@ -194,15 +201,35 @@
       const s = total % 60;
       return `${pad(h, 3)}:${pad(m, 2)}:${pad(s, 2)}`;
     }
+    async function fetchWithTimeout(path, timeoutMs = FETCH_TIMEOUT_MS) {
+      clientSeq += 1;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Math.max(100, timeoutMs));
+      try {
+        const response = await fetch(path, {
+          headers: {
+            "Accept": "application/json",
+            "X-Client-Id": DEBUG_CLIENT_ID,
+            "X-Client-Instance": DEBUG_CLIENT_INSTANCE,
+            "X-Client-Seq": String(clientSeq)
+          },
+          signal: controller.signal,
+          cache: "no-store"
+        });
+        return response;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
     async function fetchJson(path) {
-      const res = await fetch(path, { headers: { "Accept": "application/json" } });
+      const res = await fetchWithTimeout(path);
       if (!res.ok) throw new Error(`${path} -> ${res.status}`);
       return res.json();
     }
     async function fetchJsonWithTiming(path) {
       const sendMs = Date.now();
       const start = performance.now();
-      const res = await fetch(path, { headers: { "Accept": "application/json" } });
+      const res = await fetchWithTimeout(path);
       const end = performance.now();
       const recvMs = Date.now();
       if (!res.ok) throw new Error(`${path} -> ${res.status}`);
@@ -370,15 +397,20 @@
       applyWarningPulse(serverNowMs);
     }
     async function refresh() {
+      if (refreshInFlight) {
+        return;
+      }
+      refreshInFlight = true;
       try {
-        const stateTiming = await fetchJsonWithTiming(`/v1/state?${buildMetricsQuery()}`);
+        const metricsQuery = buildMetricsQuery();
+        const stateTiming = await fetchJsonWithTiming(`/v1/state?${metricsQuery}`);
         updateLatencyModel(
           stateTiming.payload,
           stateTiming.rttMs,
           stateTiming.sendMs,
           stateTiming.recvMs
         );
-        const clientsPayload = await fetchJson(`/v1/clients?${buildMetricsQuery()}`);
+        const clientsPayload = await fetchJson(`/v1/clients?${metricsQuery}`);
         const state = stateTiming.payload;
         const runtime = state.runtime || {};
         const nowStamp = new Date();
@@ -406,6 +438,11 @@ pulse_ms       : ${pad(runtime.warning_pulse_time_ms ?? 0, 6)}`;
           const offset = fmtSigned(client.last_offset_ms, 8, 1);
           const desync = fmtSigned(client.last_desync_ms, 8, 1);
           const rps = reqPerSec(client, nowMs).toFixed(1).padStart(6, "0");
+          const dropPerSec = Number(client.dropped_packets_per_sec ?? 0).toFixed(2).padStart(7, " ");
+          const droppedValue = Number(client.dropped_packets ?? 0);
+          const dropped = String(
+            Number.isFinite(droppedValue) ? Math.max(0, Math.floor(droppedValue)) : 0
+          ).padStart(8, "0");
           const conn = fmtHmsFromMs(nowMs - (client.first_seen_unix_ms || nowMs));
           tr.innerHTML = `
             <td>${client.id || ""}</td>
@@ -415,23 +452,34 @@ pulse_ms       : ${pad(runtime.warning_pulse_time_ms ?? 0, 6)}`;
             <td>${offset}</td>
             <td>${desync}</td>
             <td>${rps}</td>
+            <td>${dropPerSec}</td>
+            <td>${dropped}</td>
             <td>${conn}</td>
           `;
           tbody.appendChild(tr);
         }
+        refreshFailureStreak = 0;
       } catch (err) {
-        document.body.classList.remove("pulse-soft", "pulse-on");
-        const clockEl = document.getElementById("clock");
-        clockEl.classList.remove("clock-warn");
-        runtimeModel.warningEnabled = false;
-        runtimeModel.warningActiveCount = 0;
-        document.getElementById("stamp").innerHTML = `<span class="bad">${String(err)}</span>`;
+        refreshFailureStreak += 1;
+        if (refreshFailureStreak >= FAILURE_GRACE_COUNT) {
+          document.body.classList.remove("pulse-soft", "pulse-on");
+          const clockEl = document.getElementById("clock");
+          clockEl.classList.remove("clock-warn");
+          runtimeModel.warningEnabled = false;
+          runtimeModel.warningActiveCount = 0;
+          document.getElementById("stamp").innerHTML = `<span class="bad">${String(err)}</span>`;
+        } else {
+          document.getElementById("stamp").innerHTML =
+            `<span class="warn">transient network jitter ${refreshFailureStreak}/${FAILURE_GRACE_COUNT - 1}</span>`;
+        }
+      } finally {
+        refreshInFlight = false;
+        setTimeout(refresh, STATE_POLL_MS);
       }
     }
     renderTick();
     refresh();
     setInterval(renderTick, UI_TICK_MS);
-    setInterval(refresh, STATE_POLL_MS);
   </script>
 </body>
 </html>

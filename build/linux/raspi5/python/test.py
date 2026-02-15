@@ -81,6 +81,7 @@ def main() -> int:
     conn = client.get_connection_info()
     prev_total_in: int | None = None
     prev_total_out: int | None = None
+    prev_total_dropped: int | None = None
     prev_rate_at: float | None = None
 
     try:
@@ -100,6 +101,7 @@ def main() -> int:
                         conn = client.get_connection_info()
                         prev_total_in = None
                         prev_total_out = None
+                        prev_total_dropped = None
                         prev_rate_at = None
                         recovered = True
                         print("Reconnected.")
@@ -117,22 +119,30 @@ def main() -> int:
             if (
                 prev_total_in is None
                 or prev_total_out is None
+                or prev_total_dropped is None
                 or prev_rate_at is None
                 or now_perf <= prev_rate_at
             ):
                 live_in_bps = 0.0
                 live_out_bps = 0.0
+                live_dropped_per_sec = 0.0
             else:
                 elapsed = now_perf - prev_rate_at
                 delta_in = max(0, state.total_in_bytes - prev_total_in)
                 delta_out = max(0, state.total_out_bytes - prev_total_out)
+                delta_dropped = max(0, state.total_dropped_packets - prev_total_dropped)
                 live_in_bps = delta_in / elapsed
                 live_out_bps = delta_out / elapsed
+                live_dropped_per_sec = delta_dropped / elapsed
             prev_total_in = state.total_in_bytes
             prev_total_out = state.total_out_bytes
+            prev_total_dropped = state.total_dropped_packets
             prev_rate_at = now_perf
 
             clear()
+            print(f"Corrected Date: {corrected_time.date_text}")
+            print(f"Corrected Time: {corrected_time.time_12h}")
+            print("________________________________")
             print(
                 f"IP Local: {ip_info.resolved_local_ip}, Public: {ip_info.public_ip}, Loopback: {ip_info.loopback_ip}"
             )
@@ -140,20 +150,21 @@ def main() -> int:
                 f"Connected IP: {conn.connection_ip}  Port: {conn.port} Connection Type: {connection_type}"
             )
             print(f"Corrected Unix MS: {corrected_time.corrected_unix_ms}")
-            print(f"Corrected Date: {corrected_time.date_text}")
-            print(f"Corrected Time: {corrected_time.time_12h}")
             print(f"Offset: {corrected_time.offset_ms:.2f} ms")
             print(f"RTT: {corrected_time.rtt_ms:.2f} ms")
             print(f"Desync: {corrected_time.desync_ms:.2f} ms")
             print("_________________________________")
             print("Live IN/s:", f"{time.format_bytes_auto(live_in_bps)}/s")
             print("Live OUT/s:", f"{time.format_bytes_auto(live_out_bps)}/s")
+            print("Live Drop/s:", f"{live_dropped_per_sec:06.2f}/s")
             print("Session IN/s:", f"{time.format_bytes_auto(state.session_in_bytes_per_sec)}/s")
             print("Session OUT/s:", f"{time.format_bytes_auto(state.session_out_bytes_per_sec)}/s")
+            print("Session Drop/s:", f"{state.session_dropped_packets_per_sec:06.2f}/s")
             print("Session Last IN:", time.format_unix_ms_local(state.session_last_in_unix_ms))
             print("Session Last OUT:", time.format_unix_ms_local(state.session_last_out_unix_ms))
             print("Total IN:", time.format_bytes_auto(state.total_in_bytes))
             print("Total OUT:", time.format_bytes_auto(state.total_out_bytes))
+            print("Total Dropped:", state.total_dropped_packets)
             print("Total Requests:", state.total_requests)
             print("________________________________")
             print(time.format_scan_report(report))

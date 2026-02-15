@@ -27,8 +27,10 @@ class StateResponse:
     total_requests: int
     total_in_bytes: int
     total_out_bytes: int
+    total_dropped_packets: int
     session_in_bytes_per_sec: float
     session_out_bytes_per_sec: float
+    session_dropped_packets_per_sec: float
     server_started_unix_ms: int
     session_first_in_unix_ms: int
     session_last_in_unix_ms: int
@@ -62,6 +64,9 @@ class PublicClient:
     total_out_bytes: int
     in_bytes_per_sec: float
     out_bytes_per_sec: float
+    dropped_packets: int
+    dropped_packets_per_sec: float
+    last_client_seq: int | None
 
 
 @dataclass
