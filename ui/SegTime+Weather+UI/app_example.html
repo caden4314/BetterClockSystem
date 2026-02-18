@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DSEG Application Example</title>
+  <link rel="stylesheet" type="text/css" href="./app_example.css">
+  <link rel="stylesheet" type="text/css" href="./app_example_font_override.css">
+  <script src="./app_example.js"></script>
+</head>
+<body onload="startClock()">
+  <div class="center">
+    <div class="Clock-Stage">
+      <div class="Clock-Wrapper">
+        <span class="Clock-Time-Background D7MBI">88:88<span class="Clock-Sec">88</span></span>
+        <span id="DSEGClock" class="Clock-Time-Front D7MBI"></span>
+        <span class="Clock-Year-Background"><span class="D7MI">2088-88-88</span><span class="D14MI"> ~~~</span></span>
+        <span id="DSEGClock-Year" class="Clock-Year-Front"></span>
+      </div>
+    </div>
+  </div>
+  <div id="instanceLabel" class="instance-label">instance: --</div>
+  <div id="forecastStrip" class="forecast-strip"></div>
+</body>
+</html>

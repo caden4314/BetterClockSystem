@@ -19,8 +19,5 @@ tools/zig*.zip
 # Release bundles are distributed via GitHub Releases, not git history.
 build/releases/
 
-# Random UI thing.
-ui
-
 # Keys
 .keys
